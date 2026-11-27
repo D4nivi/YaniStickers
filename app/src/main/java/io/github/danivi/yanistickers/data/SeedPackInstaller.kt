@@ -5,12 +5,13 @@ import android.content.res.AssetManager
 import java.io.File
 
 /**
- * Copia los packs de prueba desde `assets/seed_packs/` a `filesDir/packs/` cuando no existen,
- * para que el `ContentProvider` sirva siempre desde el almacenamiento interno de la app.
+ * Copia los packs de prueba desde `assets/seed_packs/` a `filesDir/packs/` únicamente en el primer
+ * arranque, respetando después si el usuario decide editarlos o borrarlos.
  */
 object SeedPackInstaller {
 
     private const val SEED_ROOT_ASSET = "seed_packs"
+    private const val SEEDS_MARKER_FILE = ".seeds_initialized"
 
     fun ensureSeedPacksInstalled(context: Context) {
         val assets = context.assets
@@ -18,6 +19,9 @@ object SeedPackInstaller {
         if (!packsRoot.exists()) {
             packsRoot.mkdirs()
         }
+
+        val marker = File(packsRoot, SEEDS_MARKER_FILE)
+        if (marker.isFile) return
 
         val seedDirs = assets.list(SEED_ROOT_ASSET).orEmpty()
         for (dirName in seedDirs) {
@@ -34,6 +38,8 @@ object SeedPackInstaller {
 
             copyAssetTree(assets, "$SEED_ROOT_ASSET/$dirName", targetDir)
         }
+
+        runCatching { marker.writeText("1", Charsets.UTF_8) }
     }
 
     private fun copyAssetTree(assets: AssetManager, assetPath: String, destDir: File) {

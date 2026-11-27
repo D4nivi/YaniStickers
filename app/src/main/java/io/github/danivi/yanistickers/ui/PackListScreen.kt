@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -183,12 +183,6 @@ fun PackListScreen(
                         Icon(
                             imageVector = Icons.Outlined.Archive,
                             contentDescription = stringResource(R.string.action_backup),
-                        )
-                    }
-                    IconButton(onClick = viewModel::refresh) {
-                        Icon(
-                            imageVector = Icons.Outlined.Refresh,
-                            contentDescription = stringResource(R.string.action_refresh),
                         )
                     }
                 },
@@ -404,6 +398,14 @@ private fun PackSummaryCard(
                 }
             }
 
+            if (item.previewStickerFiles.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                PackStickersPreviewStrip(
+                    files = item.previewStickerFiles,
+                    packName = pack.name,
+                )
+            }
+
             if (errors.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(10.dp))
                 PackErrorsBanner(errors = errors)
@@ -417,6 +419,48 @@ private fun PackSummaryCard(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.action_add_to_whatsapp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PackStickersPreviewStrip(
+    files: List<java.io.File>,
+    packName: String,
+) {
+    val previewCount = 5
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for (index in 0 until previewCount) {
+            val file = files.getOrNull(index)
+            if (file != null) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .weight(1f)
+                        .aspectRatio(1f),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(4.dp),
+                    ) {
+                        LocalStickerThumbnail(
+                            file = file,
+                            contentDescription = "$packName sticker ${index + 1}",
+                        )
+                    }
+                }
+            } else {
+                Spacer(
+                    modifier = Modifier
+                        .weight(1f)
+                        .aspectRatio(1f),
+                )
             }
         }
     }
@@ -457,7 +501,7 @@ private fun CreatePackDialog(
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
-    var publisher by remember { mutableStateOf("Yani") }
+    var publisher by remember { mutableStateOf("MrDaniix") }
     var animated by remember { mutableStateOf(false) }
 
     val canCreate = name.trim().isNotEmpty() &&

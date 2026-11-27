@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,7 +35,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.ImageLoader
 import coil3.compose.AsyncImage
 import coil3.gif.AnimatedImageDecoder
@@ -311,21 +312,14 @@ fun StickerMetadataEditorFields(
             modifier = Modifier.fillMaxWidth(),
         )
 
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            QUICK_EMOJIS.forEach { emoji ->
-                SuggestionChip(
-                    onClick = {
-                        if (parsedEmojis.size < PackValidator.MAX_EMOJIS) {
-                            onEmojisTextChange((parsedEmojis + emoji).joinToString(" "))
-                        }
-                    },
-                    label = { Text(emoji) },
-                )
-            }
-        }
+        EmojiFiveColumnGrid(
+            emojis = QUICK_EMOJIS,
+            onEmojiClick = { emoji ->
+                if (parsedEmojis.size < PackValidator.MAX_EMOJIS) {
+                    onEmojisTextChange((parsedEmojis + emoji).joinToString(" "))
+                }
+            },
+        )
 
         OutlinedTextField(
             value = accessibilityText,
@@ -395,23 +389,16 @@ private fun EmojiPickerDialog(
                         .heightIn(max = 240.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        PICKER_EMOJIS.forEach { emoji ->
-                            SuggestionChip(
-                                onClick = {
-                                    if (selectedEmojis.size < PackValidator.MAX_EMOJIS) {
-                                        val next = selectedEmojis + emoji
-                                        onEmojisChange(next)
-                                        keyboardInput = next.joinToString(" ")
-                                    }
-                                },
-                                label = { Text(emoji) },
-                            )
-                        }
-                    }
+                    EmojiFiveColumnGrid(
+                        emojis = PICKER_EMOJIS,
+                        onEmojiClick = { emoji ->
+                            if (selectedEmojis.size < PackValidator.MAX_EMOJIS) {
+                                val next = selectedEmojis + emoji
+                                onEmojisChange(next)
+                                keyboardInput = next.joinToString(" ")
+                            }
+                        },
+                    )
                 }
             }
         },
@@ -433,4 +420,47 @@ private fun EmojiPickerDialog(
             }
         },
     )
+}
+
+@Composable
+private fun EmojiFiveColumnGrid(
+    emojis: List<String>,
+    onEmojiClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        emojis.chunked(5).forEach { rowEmojis ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                rowEmojis.forEach { emoji ->
+                    Surface(
+                        onClick = { onEmojiClick(emoji) },
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = emoji,
+                                fontSize = 20.sp,
+                            )
+                        }
+                    }
+                }
+                repeat(5 - rowEmojis.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
 }

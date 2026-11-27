@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.danivi.yanistickers.data.LocalPackStore
+import io.github.danivi.yanistickers.data.PackJsonParser
 import io.github.danivi.yanistickers.data.SeedPackInstaller
 import io.github.danivi.yanistickers.data.StickerPack
 import io.github.danivi.yanistickers.validation.PackValidationReport
@@ -34,6 +35,7 @@ enum class PackSortOption(val label: String) {
 data class PackSummaryUi(
     val pack: StickerPack,
     val trayFile: File?,
+    val previewStickerFiles: List<File> = emptyList(),
     val validation: PackValidationReport,
     val whitelistStatus: PackWhitelistStatus,
 )
@@ -41,7 +43,7 @@ data class PackSummaryUi(
 data class PackListUiState(
     val isLoading: Boolean = true,
     val packs: List<PackSummaryUi> = emptyList(),
-    val sortOption: PackSortOption = PackSortOption.NAME_ASC,
+    val sortOption: PackSortOption = PackSortOption.CREATED_DESC,
     val installedTargets: List<WhatsAppTarget> = emptyList(),
     val message: String? = null,
 )
@@ -83,9 +85,16 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
                 SeedPackInstaller.ensureSeedPacksInstalled(app)
                 val targets = WhatsAppBridge.installedTargets(app)
                 val packs = store.listPacks().map { pack ->
+                    val previewFiles = pack.stickers
+                        .take(PREVIEW_STICKER_COUNT)
+                        .mapNotNull { item ->
+                            PackJsonParser.extractStickerAssetName(item.file)
+                                ?.let { assetName -> store.resolveAssetFile(pack.identifier, assetName) }
+                        }
                     PackSummaryUi(
                         pack = pack,
                         trayFile = store.resolveAssetFile(pack.identifier, pack.trayImageFile),
+                        previewStickerFiles = previewFiles,
                         validation = PackValidator.validate(store, pack),
                         whitelistStatus = WhatsAppBridge.getWhitelistStatus(app, pack.identifier),
                     )
@@ -103,8 +112,8 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun readSavedSortOption(): PackSortOption {
-        val raw = prefs.getString(KEY_SORT_OPTION, null) ?: return PackSortOption.NAME_ASC
-        return PackSortOption.entries.firstOrNull { it.name == raw } ?: PackSortOption.NAME_ASC
+        val raw = prefs.getString(KEY_SORT_OPTION, null) ?: return PackSortOption.CREATED_DESC
+        return PackSortOption.entries.firstOrNull { it.name == raw } ?: PackSortOption.CREATED_DESC
     }
 
     private fun sortPacks(
@@ -216,6 +225,7 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
     companion object {
         private const val PREFS_NAME = "yanistickers_ui_prefs"
         private const val KEY_SORT_OPTION = "pack_sort_option"
+        private const val PREVIEW_STICKER_COUNT = 5
 
         fun factory(application: Application): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {

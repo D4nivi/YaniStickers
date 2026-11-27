@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.RotateRight
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.RestartAlt
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
@@ -116,7 +118,8 @@ fun DrawScope.drawTransparencyCheckerboard(cellSizePx: Float) {
 }
 
 /**
- * Barra compartida de controles de encuadre (`Encajar`/`Rellenar`, rotación 90° y restablecer).
+ * Barra compartida de controles de encuadre (`Encajar`/`Rellenar`, rotación 90°, restablecer y
+ * cambiar archivo de origen).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -125,6 +128,10 @@ fun StickerFramingControlsRow(
     onSelectMode: (FramingMode) -> Unit,
     onRotate90: () -> Unit,
     onReset: () -> Unit,
+    onChangeSource: () -> Unit,
+    changeSourceIcon: ImageVector = Icons.Outlined.AddPhotoAlternate,
+    changeSourceContentDescription: String = "Cambiar archivo",
+    changeSourceMenu: @Composable () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -133,6 +140,7 @@ fun StickerFramingControlsRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         FlowRow(
+            modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilterChip(
@@ -158,6 +166,15 @@ fun StickerFramingControlsRow(
                     imageVector = Icons.Outlined.RestartAlt,
                     contentDescription = "Restablecer encuadre",
                 )
+            }
+            Box {
+                IconButton(onClick = onChangeSource) {
+                    Icon(
+                        imageVector = changeSourceIcon,
+                        contentDescription = changeSourceContentDescription,
+                    )
+                }
+                changeSourceMenu()
             }
         }
     }

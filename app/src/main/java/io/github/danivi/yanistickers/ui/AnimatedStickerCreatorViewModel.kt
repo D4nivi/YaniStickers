@@ -38,7 +38,6 @@ data class AnimatedStickerCreatorUiState(
     val transform: StickerFramingTransform = StickerFramingTransform(),
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = 0L,
-    val encodeError: String? = null,
     val nameInput: String = "",
     val emojisInput: String = "🎬",
     val accessibilityInput: String = "",
@@ -47,13 +46,6 @@ data class AnimatedStickerCreatorUiState(
 ) {
     val isVideoSource: Boolean
         get() = probe?.kind == AnimatedSourceKind.VIDEO
-
-    val willUseDirectPassthrough: Boolean
-        get() {
-            val currentProbe = probe ?: return false
-            return currentProbe.isDirectValidWebp &&
-                transform.normalized() == StickerFramingTransform(mode = FramingMode.FIT)
-        }
 
     val canSave: Boolean
         get() {
@@ -106,7 +98,6 @@ class AnimatedStickerCreatorViewModel(
             _uiState.update {
                 it.copy(
                     isProbing = true,
-                    encodeError = null,
                     saveProgress = 0f,
                     saveStatus = "",
                 )
@@ -133,7 +124,6 @@ class AnimatedStickerCreatorViewModel(
                         transform = StickerFramingTransform(mode = FramingMode.FIT),
                         trimStartMs = 0L,
                         trimEndMs = initialEnd,
-                        encodeError = null,
                     )
                 }
             }.onFailure { error ->
@@ -198,7 +188,6 @@ class AnimatedStickerCreatorViewModel(
             it.copy(
                 trimStartMs = clampedStart,
                 trimEndMs = clampedEnd,
-                encodeError = null,
             )
         }
     }
@@ -232,7 +221,6 @@ class AnimatedStickerCreatorViewModel(
             _uiState.update {
                 it.copy(
                     isSaving = true,
-                    encodeError = null,
                     saveProgress = 0.02f,
                     saveStatus = "Iniciando conversión...",
                 )
@@ -297,7 +285,6 @@ class AnimatedStickerCreatorViewModel(
                         isSaving = false,
                         saveProgress = 0f,
                         saveStatus = "",
-                        encodeError = errMsg,
                         message = errMsg,
                     )
                 }
@@ -323,7 +310,6 @@ class AnimatedStickerCreatorViewModel(
         _uiState.update {
             it.copy(
                 transform = next,
-                encodeError = null,
             )
         }
     }

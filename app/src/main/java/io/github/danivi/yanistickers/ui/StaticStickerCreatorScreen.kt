@@ -5,14 +5,10 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -24,11 +20,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -41,11 +35,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.danivi.yanistickers.R
-import io.github.danivi.yanistickers.validation.PackValidator
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -142,11 +134,9 @@ fun StaticStickerCreatorScreen(
                     onSelectMode = viewModel::setFramingMode,
                     onRotate90 = viewModel::rotate90,
                     onReset = viewModel::resetTransform,
-                )
-
-                EncodedSizeStatusBanner(
-                    state = state,
-                    onChangeImage = ::openPhotoPicker,
+                    onChangeSource = ::openPhotoPicker,
+                    changeSourceIcon = Icons.Outlined.AddPhotoAlternate,
+                    changeSourceContentDescription = "Cambiar imagen",
                 )
 
                 if (!state.forTray) {
@@ -169,9 +159,13 @@ fun StaticStickerCreatorScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        stringResource(
-                            if (state.forTray) R.string.action_save_tray else R.string.action_save_sticker,
-                        ),
+                        if (state.isSaving) {
+                            "Guardando..."
+                        } else {
+                            stringResource(
+                                if (state.forTray) R.string.action_save_tray else R.string.action_save_sticker,
+                            )
+                        },
                     )
                 }
             }
@@ -214,62 +208,6 @@ private fun EmptyImageSelectionCard(
                 Button(onClick = onPickImage) {
                     Text(stringResource(R.string.action_pick_image))
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EncodedSizeStatusBanner(
-    state: StaticStickerCreatorUiState,
-    onChangeImage: () -> Unit,
-) {
-    val isError = state.encodeError != null
-    val containerColor = if (isError) {
-        MaterialTheme.colorScheme.errorContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant
-    }
-    val contentColor = if (isError) {
-        MaterialTheme.colorScheme.onErrorContainer
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    Surface(
-        color = containerColor,
-        contentColor = contentColor,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                val maxKb = state.maxBytes / 1024
-                val statusText = when {
-                    state.isEncoding -> "Calculando WebP (${state.targetDimensionPx}×${state.targetDimensionPx})..."
-                    state.encodeError != null -> state.encodeError
-                    state.encodedBytes != null -> {
-                        val sizeKb = PackValidator.formatKb(state.encodedBytes.size.toLong())
-                        val modeLabel = if (state.usedLossless) "sin pérdida" else "optimizado"
-                        "WebP ${state.targetDimensionPx}×${state.targetDimensionPx} · $sizeKb / $maxKb KB ($modeLabel)"
-                    }
-                    else -> "Preparando..."
-                }
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(onClick = onChangeImage) {
-                Text("Cambiar")
             }
         }
     }

@@ -13,23 +13,24 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PermMedia
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,7 +41,6 @@ import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -94,6 +94,7 @@ fun AnimatedStickerCreatorScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var launchedInitialPicker by rememberSaveable { mutableStateOf(false) }
     var showAdvanced by rememberSaveable { mutableStateOf(false) }
+    var showChangeSourceMenu by remember { mutableStateOf(false) }
 
     val videoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -229,6 +230,32 @@ fun AnimatedStickerCreatorScreen(
                     onSelectMode = viewModel::setFramingMode,
                     onRotate90 = viewModel::rotate90,
                     onReset = viewModel::resetTransform,
+                    onChangeSource = { showChangeSourceMenu = true },
+                    changeSourceIcon = Icons.Outlined.PermMedia,
+                    changeSourceContentDescription = "Cambiar archivo",
+                    changeSourceMenu = {
+                        DropdownMenu(
+                            expanded = showChangeSourceMenu,
+                            onDismissRequest = { showChangeSourceMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_pick_media)) },
+                                leadingIcon = { Icon(Icons.Outlined.Movie, contentDescription = null) },
+                                onClick = {
+                                    showChangeSourceMenu = false
+                                    openVideoPicker()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_pick_document)) },
+                                leadingIcon = { Icon(Icons.Outlined.FolderOpen, contentDescription = null) },
+                                onClick = {
+                                    showChangeSourceMenu = false
+                                    openDocumentPicker()
+                                },
+                            )
+                        }
+                    },
                 )
 
                 if (state.isVideoSource) {
@@ -240,13 +267,6 @@ fun AnimatedStickerCreatorScreen(
                         onRangeChanged = viewModel::onTrimRangeChanged,
                     )
                 }
-
-                AnimatedSourceStatusBanner(
-                    state = state,
-                    probe = probe,
-                    onPickVideo = ::openVideoPicker,
-                    onPickDocument = ::openDocumentPicker,
-                )
 
                 AdvancedStickerMetadataCard(
                     expanded = showAdvanced,
@@ -590,79 +610,6 @@ private fun VideoTrimCard(
                 valueRange = 0f..maxDuration,
                 enabled = enabled,
             )
-        }
-    }
-}
-
-@Composable
-private fun AnimatedSourceStatusBanner(
-    state: AnimatedStickerCreatorUiState,
-    probe: AnimatedSourceProbe,
-    onPickVideo: () -> Unit,
-    onPickDocument: () -> Unit,
-) {
-    val isError = state.encodeError != null
-    val containerColor = if (isError) {
-        MaterialTheme.colorScheme.errorContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant
-    }
-    val contentColor = if (isError) {
-        MaterialTheme.colorScheme.onErrorContainer
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    Surface(
-        color = containerColor,
-        contentColor = contentColor,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            val statusText = when {
-                state.encodeError != null -> state.encodeError
-                state.willUseDirectPassthrough -> {
-                    val kb = PackValidator.formatKb(probe.sourceFile.length())
-                    val dur = PackValidator.formatSeconds(probe.totalDurationMs)
-                    "WebP animado 512×512 · $kb / ${PackValidator.MAX_ANIMATED_STICKER_KB} KB · $dur (sin recompresión)"
-                }
-                probe.kind == AnimatedSourceKind.VIDEO -> {
-                    val dur = PackValidator.formatSeconds((state.trimEndMs - state.trimStartMs).coerceAtLeast(0L))
-                    "Vídeo ${probe.width}×${probe.height} · Tramo $dur · Se convertirá a WebP al guardar"
-                }
-                probe.kind == AnimatedSourceKind.GIF -> {
-                    val dur = PackValidator.formatSeconds(probe.totalDurationMs.coerceAtMost(PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS))
-                    "GIF ${probe.width}×${probe.height} · $dur · Se convertirá a WebP al guardar"
-                }
-                else -> {
-                    val dur = PackValidator.formatSeconds(probe.totalDurationMs.coerceAtMost(PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS))
-                    "WebP ${probe.width}×${probe.height} · $dur · Se adaptará a 512×512 (≤ 500 KB) al guardar"
-                }
-            }
-            Text(
-                text = statusText,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                OutlinedButton(onClick = onPickDocument) {
-                    Text("Archivo")
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                OutlinedButton(onClick = onPickVideo) {
-                    Text("Vídeos")
-                }
-            }
         }
     }
 }

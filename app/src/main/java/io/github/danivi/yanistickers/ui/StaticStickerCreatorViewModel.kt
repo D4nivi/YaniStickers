@@ -14,8 +14,6 @@ import io.github.danivi.yanistickers.data.StaticStickerEncoder
 import io.github.danivi.yanistickers.data.StickerFramingTransform
 import io.github.danivi.yanistickers.validation.PackValidator
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,13 +25,9 @@ data class StaticStickerCreatorUiState(
     val forTray: Boolean = false,
     val packName: String = "",
     val isDecoding: Boolean = false,
-    val isEncoding: Boolean = false,
     val isSaving: Boolean = false,
     val sourceBitmap: Bitmap? = null,
     val transform: StickerFramingTransform = StickerFramingTransform(),
-    val encodedBytes: ByteArray? = null,
-    val usedLossless: Boolean = false,
-    val encodeError: String? = null,
     val nameInput: String = "",
     val emojisInput: String = "😀",
     val accessibilityInput: String = "",
@@ -56,7 +50,7 @@ data class StaticStickerCreatorUiState(
 
     val canSave: Boolean
         get() {
-            if (isDecoding || isSaving || sourceBitmap == null || encodedBytes == null || encodeError != null) {
+            if (isDecoding || isSaving || sourceBitmap == null) {
                 return false
             }
             if (forTray) return true
@@ -68,7 +62,8 @@ data class StaticStickerCreatorUiState(
 }
 
 /**
- * ViewModel para crear un sticker estático (`512×512`) o personalizar el icono de bandeja (`96×96`).
+ * ViewModel para previsualizar el encuadre y convertir a sticker estático (`512×512`) o icono de
+ * bandeja (`96×96`) en formato WebP únicamente al pulsar «Guardar».
  */
 class StaticStickerCreatorViewModel(
     application: Application,
@@ -80,7 +75,6 @@ class StaticStickerCreatorViewModel(
     private val _uiState = MutableStateFlow(StaticStickerCreatorUiState(forTray = forTray))
     val uiState: StateFlow<StaticStickerCreatorUiState> = _uiState.asStateFlow()
 
-    private var encodeJob: Job? = null
     private var currentSessionId: Long = -1L
 
     init {
@@ -97,7 +91,6 @@ class StaticStickerCreatorViewModel(
     fun ensureSession(sessionId: Long) {
         if (currentSessionId == sessionId) return
         currentSessionId = sessionId
-        encodeJob?.cancel()
         val packName = _uiState.value.packName
         _uiState.value = StaticStickerCreatorUiState(
             forTray = forTray,
@@ -111,13 +104,7 @@ class StaticStickerCreatorViewModel(
 
     fun onImageSelected(uri: Uri) {
         viewModelScope.launch {
-            _uiState.update {
-                it.copy(
-                    isDecoding = true,
-                    encodeError = null,
-                    encodedBytes = null,
-                )
-            }
+            _uiState.update { it.copy(isDecoding = true) }
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     StaticStickerEncoder.decodeSourceBitmap(getApplication(), uri)
@@ -132,7 +119,6 @@ class StaticStickerCreatorViewModel(
                         transform = resetTransform,
                     )
                 }
-                scheduleEncode(bitmap, resetTransform, immediate = true)
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
@@ -213,14 +199,16 @@ class StaticStickerCreatorViewModel(
 
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true) }
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val encoded = StaticStickerEncoder.renderAndEncodeWebp(
+            val result = runCatching {
+                val encoded = withContext(Dispatchers.Default) {
+                    StaticStickerEncoder.renderAndEncodeWebp(
                         sourceBitmap = bitmap,
                         transform = current.transform,
                         outputSizePx = current.targetDimensionPx,
                         maxBytes = current.maxBytes,
                     )
+                }
+                withContext(Dispatchers.IO) {
                     if (forTray) {
                         store.updateTrayIcon(
                             identifier = packId,
@@ -256,53 +244,9 @@ class StaticStickerCreatorViewModel(
     }
 
     private fun updateTransform(transformBlock: StickerFramingTransform.() -> StickerFramingTransform) {
-        val bitmap = _uiState.value.sourceBitmap ?: return
+        if (_uiState.value.sourceBitmap == null) return
         val next = _uiState.value.transform.transformBlock().normalized()
         _uiState.update { it.copy(transform = next) }
-        scheduleEncode(bitmap, next, immediate = false)
-    }
-
-    private fun scheduleEncode(
-        bitmap: Bitmap,
-        transform: StickerFramingTransform,
-        immediate: Boolean,
-    ) {
-        encodeJob?.cancel()
-        val stateSnapshot = _uiState.value
-        encodeJob = viewModelScope.launch {
-            _uiState.update { it.copy(isEncoding = true, encodeError = null) }
-            if (!immediate) {
-                delay(150)
-            }
-            val result = withContext(Dispatchers.Default) {
-                runCatching {
-                    StaticStickerEncoder.renderAndEncodeWebp(
-                        sourceBitmap = bitmap,
-                        transform = transform,
-                        outputSizePx = stateSnapshot.targetDimensionPx,
-                        maxBytes = stateSnapshot.maxBytes,
-                    )
-                }
-            }
-            result.onSuccess { encoded ->
-                _uiState.update {
-                    it.copy(
-                        isEncoding = false,
-                        encodedBytes = encoded.bytes,
-                        usedLossless = encoded.usedLossless,
-                        encodeError = null,
-                    )
-                }
-            }.onFailure { error ->
-                _uiState.update {
-                    it.copy(
-                        isEncoding = false,
-                        encodedBytes = null,
-                        encodeError = error.message ?: "Error al codificar WebP.",
-                    )
-                }
-            }
-        }
     }
 
     companion object {

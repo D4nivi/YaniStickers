@@ -44,7 +44,7 @@ data class PackEditorUiState(
     val whitelistStatus: PackWhitelistStatus = PackWhitelistStatus(),
     val nameInput: String = "",
     val publisherInput: String = "",
-    val isGridView: Boolean = false,
+    val isGridView: Boolean = true,
     val message: String? = null,
 ) {
     val hasMetadataChanges: Boolean
@@ -70,7 +70,7 @@ class PackEditorViewModel(
     private val store = LocalPackStore(application)
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val _uiState = MutableStateFlow(
-        PackEditorUiState(isGridView = prefs.getBoolean(KEY_EDITOR_GRID_VIEW, false)),
+        PackEditorUiState(isGridView = prefs.getBoolean(KEY_EDITOR_GRID_VIEW, true)),
     )
     val uiState: StateFlow<PackEditorUiState> = _uiState.asStateFlow()
 

@@ -4,6 +4,7 @@
     <string name="pack_list_empty_title">Aún no tienes packs</string>
     <string name="pack_list_empty_body">Crea un pack nuevo para empezar a organizar tus stickers.</string>
     <string name="action_refresh">Recargar</string>
+    <string name="action_sort_packs">Ordenar packs</string>
     <string name="action_backup">Copia de seguridad</string>
     <string name="action_export_zip">Exportar (.zip)</string>
     <string name="action_export_short">Exportar</string>
@@ -21,6 +22,16 @@
     <string name="action_save">Guardar</string>
     <string name="action_back">Volver</string>
     <string name="action_add_sticker">Añadir sticker</string>
+    <string name="action_change_tray">Cambiar icono</string>
+    <string name="action_toggle_view">Cambiar vista</string>
+    <string name="action_set_as_tray">Poner como icono del pack</string>
+    <string name="action_use_as_tray_short">Usar como icono</string>
+    <string name="creator_static_title">Nuevo sticker estático</string>
+    <string name="creator_tray_title">Icono de bandeja</string>
+    <string name="action_pick_image">Elegir imagen</string>
+    <string name="action_save_sticker">Guardar sticker</string>
+    <string name="action_save_tray">Guardar icono</string>
+    <string name="creator_advanced">Avanzado</string>
     <string name="badge_animated">Animado</string>
     <string name="badge_static">Estático</string>
     <string name="status_added">Añadido en WhatsApp</string>

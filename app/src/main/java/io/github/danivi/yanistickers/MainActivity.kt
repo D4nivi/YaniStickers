@@ -18,6 +18,8 @@ import io.github.danivi.yanistickers.ui.PackEditorScreen
 import io.github.danivi.yanistickers.ui.PackEditorViewModel
 import io.github.danivi.yanistickers.ui.PackListScreen
 import io.github.danivi.yanistickers.ui.PackListViewModel
+import io.github.danivi.yanistickers.ui.StaticStickerCreatorScreen
+import io.github.danivi.yanistickers.ui.StaticStickerCreatorViewModel
 import io.github.danivi.yanistickers.ui.theme.YaniStickersTheme
 
 class MainActivity : ComponentActivity() {
@@ -58,6 +60,42 @@ class MainActivity : ComponentActivity() {
                         }
                         PackEditorScreen(
                             viewModel = editorViewModel,
+                            onBack = {
+                                if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+                            },
+                            onAddStaticSticker = {
+                                backStack.add(
+                                    AppScreen.StaticStickerCreator(
+                                        packId = currentScreen.packId,
+                                        forTray = false,
+                                    ),
+                                )
+                            },
+                            onChangeTrayIcon = {
+                                backStack.add(
+                                    AppScreen.StaticStickerCreator(
+                                        packId = currentScreen.packId,
+                                        forTray = true,
+                                    ),
+                                )
+                            },
+                        )
+                    }
+                    is AppScreen.StaticStickerCreator -> {
+                        val creatorViewModel: StaticStickerCreatorViewModel = viewModel(
+                            key = "creator_${currentScreen.packId}_${currentScreen.forTray}",
+                            factory = StaticStickerCreatorViewModel.factory(
+                                application = app,
+                                packId = currentScreen.packId,
+                                forTray = currentScreen.forTray,
+                            ),
+                        )
+                        remember(currentScreen.sessionId) {
+                            creatorViewModel.ensureSession(currentScreen.sessionId)
+                            true
+                        }
+                        StaticStickerCreatorScreen(
+                            viewModel = creatorViewModel,
                             onBack = {
                                 if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
                             },

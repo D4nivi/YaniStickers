@@ -1,12 +1,14 @@
 package io.github.danivi.yanistickers.ui
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.danivi.yanistickers.data.LocalPackStore
 import io.github.danivi.yanistickers.data.PackJsonParser
+import io.github.danivi.yanistickers.data.StaticStickerEncoder
 import io.github.danivi.yanistickers.data.StickerItem
 import io.github.danivi.yanistickers.data.StickerPack
 import io.github.danivi.yanistickers.validation.PackValidationReport
@@ -42,6 +44,7 @@ data class PackEditorUiState(
     val whitelistStatus: PackWhitelistStatus = PackWhitelistStatus(),
     val nameInput: String = "",
     val publisherInput: String = "",
+    val isGridView: Boolean = false,
     val message: String? = null,
 ) {
     val hasMetadataChanges: Boolean
@@ -65,16 +68,30 @@ class PackEditorViewModel(
 ) : AndroidViewModel(application) {
 
     private val store = LocalPackStore(application)
-    private val _uiState = MutableStateFlow(PackEditorUiState())
+    private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val _uiState = MutableStateFlow(
+        PackEditorUiState(isGridView = prefs.getBoolean(KEY_EDITOR_GRID_VIEW, false)),
+    )
     val uiState: StateFlow<PackEditorUiState> = _uiState.asStateFlow()
 
     init {
-        refresh(syncInputs = true)
+        refresh(syncInputs = true, showLoading = true)
     }
 
-    fun refresh(syncInputs: Boolean = false) {
+    fun toggleViewMode() {
+        val next = !_uiState.value.isGridView
+        prefs.edit().putBoolean(KEY_EDITOR_GRID_VIEW, next).apply()
+        _uiState.update { it.copy(isGridView = next) }
+    }
+
+    fun refresh(
+        syncInputs: Boolean = false,
+        showLoading: Boolean = _uiState.value.pack == null,
+    ) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true) }
+            if (showLoading) {
+                _uiState.update { it.copy(isLoading = true) }
+            }
             val loaded = withContext(Dispatchers.IO) {
                 val app = getApplication<Application>()
                 val pack = store.getPack(packId)
@@ -163,7 +180,7 @@ class PackEditorViewModel(
         }
     }
 
-    fun updateSticker(index: Int, emojisRaw: String, accessibilityText: String) {
+    fun updateSticker(index: Int, name: String, emojisRaw: String, accessibilityText: String) {
         val emojis = PackJsonParser.splitEmojisGraphemes(emojisRaw)
         viewModelScope.launch {
             val updated = withContext(Dispatchers.IO) {
@@ -172,6 +189,7 @@ class PackEditorViewModel(
                     stickerIndex = index,
                     emojis = emojis,
                     accessibilityText = accessibilityText,
+                    name = name,
                 )
             }
             if (updated != null) {
@@ -195,12 +213,56 @@ class PackEditorViewModel(
     }
 
     private fun reorderSticker(fromIndex: Int, toIndex: Int) {
+        val current = _uiState.value
+        val currentPack = current.pack ?: return
+        if (fromIndex !in current.stickers.indices || toIndex !in current.stickers.indices || fromIndex == toIndex) {
+            return
+        }
+
+        // Actualización optimista inmediata para que Compose anime el intercambio sin recargar la pantalla
+        val optimisticStickers = current.stickers.toMutableList().apply {
+            val moved = removeAt(fromIndex)
+            add(toIndex, moved)
+        }.mapIndexed { idx, row -> row.copy(index = idx) }
+        val optimisticPackItems = optimisticStickers.map { it.item }
+        _uiState.update {
+            it.copy(
+                pack = currentPack.copy(stickers = optimisticPackItems),
+                stickers = optimisticStickers,
+            )
+        }
+
         viewModelScope.launch {
             val updated = withContext(Dispatchers.IO) {
                 store.reorderStickers(packId, fromIndex, toIndex)
             }
             if (updated != null) {
-                refresh()
+                refresh(showLoading = false)
+            }
+        }
+    }
+
+    fun setStickerAsTrayIcon(stickerIndex: Int) {
+        val sticker = _uiState.value.stickers.getOrNull(stickerIndex) ?: return
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val assetName = PackJsonParser.extractStickerAssetName(sticker.item.file)
+                        ?: error("Archivo de sticker inválido.")
+                    val file = store.resolveAssetFile(packId, assetName)
+                        ?: error("No se encontró el archivo del sticker.")
+                    val trayBytes = StaticStickerEncoder.encodeWebpFileAsTray(file)
+                    store.updateTrayIcon(packId, trayBytes)
+                        ?: error("No se encontró el pack.")
+                }
+            }
+            result.onSuccess {
+                _uiState.update { it.copy(message = "Icono del pack actualizado.") }
+                refresh(showLoading = false)
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(message = error.message ?: "No se pudo actualizar el icono del pack.")
+                }
             }
         }
     }
@@ -222,7 +284,7 @@ class PackEditorViewModel(
     fun notifyAddStickerUpcoming() {
         _uiState.update {
             it.copy(
-                message = "La creación e importación de stickers llegará en las Fases 4 (estáticos) y 5 (animados).",
+                message = "La creación e importación de stickers animados llegará en la Fase 5.",
             )
         }
     }
@@ -241,6 +303,9 @@ class PackEditorViewModel(
     )
 
     companion object {
+        private const val PREFS_NAME = "yanistickers_ui_prefs"
+        private const val KEY_EDITOR_GRID_VIEW = "editor_grid_view"
+
         fun factory(application: Application, packId: String): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")

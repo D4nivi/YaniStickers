@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.File
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.UUID
 
 /**
  * Gestiona la lectura y operaciones CRUD de los packs en `filesDir/packs/`.
@@ -14,6 +15,7 @@ class LocalPackStore(
         DefaultTrayGenerator.writeFallbackPngTray(dest, animated)
         dest.name
     },
+    private val stickerToTrayConverter: ((stickerBytes: ByteArray) -> ByteArray?)? = null,
 ) {
 
     constructor(context: Context) : this(
@@ -21,6 +23,13 @@ class LocalPackStore(
         defaultTrayWriter = { dest, packName, animated ->
             DefaultTrayGenerator.writeAndroidWebpTray(dest, packName, animated)
             dest.name
+        },
+        stickerToTrayConverter = { bytes ->
+            try {
+                StaticStickerEncoder.encodeWebpBytesAsTray(bytes)
+            } catch (_: Throwable) {
+                null
+            }
         },
     )
 
@@ -125,6 +134,7 @@ class LocalPackStore(
             stickers = emptyList(),
             createdAt = now,
             updatedAt = now,
+            usesDefaultTray = true,
         )
         writePackJsonAtomically(packDir, pack)
         pack
@@ -176,13 +186,124 @@ class LocalPackStore(
     }
 
     /**
-     * Edita los emojis y el texto de accesibilidad de un sticker concreto e incrementa versión.
+     * Añade un sticker codificado al pack [identifier], genera un nombre de archivo seguro
+     * e incrementa `imageDataVersion`.
+     */
+    fun addSticker(
+        identifier: String,
+        webpBytes: ByteArray,
+        emojis: List<String>,
+        accessibilityText: String = "",
+        name: String = "",
+    ): StickerPack? = synchronized(STORE_LOCK) {
+        val loaded = findLoadedPack(identifier) ?: return null
+        require(loaded.pack.stickers.size < MAX_STICKERS_PER_PACK) {
+            "El pack ya alcanzó el máximo de $MAX_STICKERS_PER_PACK stickers."
+        }
+        require(webpBytes.isNotEmpty()) {
+            "El archivo del sticker no puede estar vacío."
+        }
+
+        val cleanEmojis = emojis.map { it.trim() }.filter { it.isNotEmpty() }
+        require(cleanEmojis.isNotEmpty()) {
+            "Debe asociarse al menos 1 emoji al sticker."
+        }
+
+        val stickersDir = File(loaded.directory, STICKERS_DIR_NAME)
+        check(stickersDir.mkdirs() || stickersDir.isDirectory) {
+            "No se pudo crear la carpeta de stickers."
+        }
+
+        var fileName: String
+        do {
+            val suffix = UUID.randomUUID().toString().replace("-", "").take(10)
+            fileName = "stk_$suffix.webp"
+        } while (File(stickersDir, fileName).exists())
+
+        val targetFile = resolveInside(loaded.directory, "$STICKERS_DIR_NAME/$fileName")
+            ?: error("Ruta inválida para el sticker '$fileName'.")
+        writeBytesAtomically(targetFile, webpBytes)
+
+        val updatedStickers = loaded.pack.stickers + StickerItem(
+            file = "$STICKERS_DIR_NAME/$fileName",
+            emojis = cleanEmojis,
+            accessibilityText = accessibilityText.trim(),
+            name = name.trim(),
+        )
+
+        var trayFileName = loaded.pack.trayImageFile
+        var usesDefaultTray = loaded.pack.usesDefaultTray
+        if (usesDefaultTray && stickerToTrayConverter != null) {
+            val generatedTray = stickerToTrayConverter.invoke(webpBytes)
+            if (generatedTray != null && generatedTray.isNotEmpty()) {
+                val destTray = resolveInside(loaded.directory, DEFAULT_TRAY_WEBP)
+                if (destTray != null) {
+                    writeBytesAtomically(destTray, generatedTray)
+                    if (trayFileName != DEFAULT_TRAY_WEBP && PackJsonParser.isSafeSingleFileName(trayFileName)) {
+                        resolveInside(loaded.directory, trayFileName)
+                            ?.takeIf { it.isFile }
+                            ?.delete()
+                    }
+                    trayFileName = DEFAULT_TRAY_WEBP
+                    usesDefaultTray = false
+                }
+            }
+        }
+
+        val updated = loaded.pack.withNextEditVersion(
+            trayImageFile = trayFileName,
+            usesDefaultTray = usesDefaultTray,
+            stickers = updatedStickers,
+        )
+        writePackJsonAtomically(loaded.directory, updated)
+        updated
+    }
+
+    /**
+     * Sustituye el icono de bandeja del pack [identifier] e incrementa `imageDataVersion`.
+     */
+    fun updateTrayIcon(
+        identifier: String,
+        trayBytes: ByteArray,
+        fileName: String = DEFAULT_TRAY_WEBP,
+    ): StickerPack? = synchronized(STORE_LOCK) {
+        val loaded = findLoadedPack(identifier) ?: return null
+        require(PackJsonParser.isSafeSingleFileName(fileName)) {
+            "Nombre de icono de bandeja inválido: '$fileName'."
+        }
+        require(trayBytes.isNotEmpty()) {
+            "El icono de bandeja no puede estar vacío."
+        }
+
+        val targetFile = resolveInside(loaded.directory, fileName)
+            ?: error("Ruta inválida para el icono de bandeja '$fileName'.")
+        writeBytesAtomically(targetFile, trayBytes)
+
+        val previousTrayName = loaded.pack.trayImageFile
+        val updated = loaded.pack.withNextEditVersion(
+            trayImageFile = fileName,
+            usesDefaultTray = false,
+        )
+        writePackJsonAtomically(loaded.directory, updated)
+
+        if (previousTrayName != fileName && PackJsonParser.isSafeSingleFileName(previousTrayName)) {
+            val oldTray = resolveInside(loaded.directory, previousTrayName)
+            if (oldTray != null && oldTray.isFile) {
+                oldTray.delete()
+            }
+        }
+        updated
+    }
+
+    /**
+     * Edita el nombre interno, los emojis y el texto de accesibilidad de un sticker concreto e incrementa versión.
      */
     fun updateSticker(
         identifier: String,
         stickerIndex: Int,
         emojis: List<String>,
         accessibilityText: String,
+        name: String = "",
     ): StickerPack? = synchronized(STORE_LOCK) {
         val loaded = findLoadedPack(identifier) ?: return null
         if (stickerIndex !in loaded.pack.stickers.indices) return null
@@ -192,6 +313,7 @@ class LocalPackStore(
             this[stickerIndex] = this[stickerIndex].copy(
                 emojis = cleanEmojis,
                 accessibilityText = accessibilityText.trim(),
+                name = name.trim(),
             )
         }
         val updated = loaded.pack.withNextEditVersion(stickers = updatedStickers)
@@ -403,6 +525,8 @@ class LocalPackStore(
     private fun StickerPack.withNextEditVersion(
         name: String = this.name,
         publisher: String = this.publisher,
+        trayImageFile: String = this.trayImageFile,
+        usesDefaultTray: Boolean = this.usesDefaultTray,
         stickers: List<StickerItem> = this.stickers,
     ): StickerPack {
         val nextVersion = ((imageDataVersion.toIntOrNull() ?: 1) + 1).toString()
@@ -410,9 +534,20 @@ class LocalPackStore(
             name = name,
             publisher = publisher,
             imageDataVersion = nextVersion,
+            trayImageFile = trayImageFile,
+            usesDefaultTray = usesDefaultTray,
             stickers = stickers,
             updatedAt = nowIsoUtc(),
         )
+    }
+
+    private fun writeBytesAtomically(targetFile: File, bytes: ByteArray) {
+        val tempFile = File(targetFile.parentFile, "${targetFile.name}.tmp")
+        tempFile.writeBytes(bytes)
+        if (!tempFile.renameTo(targetFile)) {
+            targetFile.writeBytes(bytes)
+            tempFile.delete()
+        }
     }
 
     private fun writePackJsonAtomically(packDir: File, pack: StickerPack) {
@@ -472,6 +607,7 @@ class LocalPackStore(
         const val PACKS_DIR_NAME = "packs"
         const val STICKERS_DIR_NAME = "stickers"
         const val PACK_JSON_FILE = "pack.json"
+        const val MAX_STICKERS_PER_PACK = 30
         private const val DEFAULT_TRAY_WEBP = "tray.webp"
         private val STORE_LOCK = Any()
     }

@@ -7,6 +7,7 @@ data class StickerItem(
     val file: String,
     val emojis: List<String>,
     val accessibilityText: String = "",
+    val name: String = "",
 )
 
 /**
@@ -24,4 +25,5 @@ data class StickerPack(
     val createdAt: String,
     val updatedAt: String,
     val avoidCache: Boolean = false,
+    val usesDefaultTray: Boolean = false,
 )

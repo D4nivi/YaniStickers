@@ -3,6 +3,7 @@ package io.github.danivi.yanistickers.data
 import io.github.danivi.yanistickers.validation.ImageContainerFormat
 import io.github.danivi.yanistickers.validation.ImageContainerInspector
 import io.github.danivi.yanistickers.validation.TestImageBuilders
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -108,6 +109,91 @@ class LocalPackStoreTest {
     fun splitEmojisGraphemes_preservesCompoundEmojisAndLimitsCleanly() {
         assertEquals(listOf("😀", "🎉", "❤️"), PackJsonParser.splitEmojisGraphemes("😀🎉❤️"))
         assertEquals(listOf("👍🏽", "🔥"), PackJsonParser.splitEmojisGraphemes("👍🏽, 🔥"))
+        assertEquals(listOf("🗣️", "😈"), PackJsonParser.splitEmojisGraphemes("hola 🗣️ 123 😈"))
+        assertEquals("😀 🗣️", PackJsonParser.filterEmojiInput("abc 😀 xyz 🗣️ 😈 😂", maxEmojis = 2))
+        assertEquals(emptyList<String>(), PackJsonParser.splitEmojisGraphemes("texto normal 123"))
         assertEquals(emptyList<String>(), PackJsonParser.splitEmojisGraphemes("   "))
+    }
+
+    @Test
+    fun addStickerAndUpdateTrayIcon_persistsAssetsAndEnforcesMaxLimit() {
+        val packsRoot = tempFolder.newFolder("packs_add")
+        val store = LocalPackStore(packsRoot)
+        val created = store.createPack(name = "Estático", publisher = "Yani", animated = false)
+
+        // Cambiar icono de bandeja sustituyendo el archivo anterior si cambia de nombre
+        val customTray = TestImageBuilders.staticVp8lWebp(96, 96)
+        val afterTray = store.updateTrayIcon(created.identifier, customTray, fileName = "custom_tray.webp")!!
+        assertEquals("2", afterTray.imageDataVersion)
+        assertEquals("custom_tray.webp", afterTray.trayImageFile)
+        assertNull(store.resolveAssetFile(created.identifier, "tray.webp"))
+        assertNotNull(store.resolveAssetFile(created.identifier, "custom_tray.webp"))
+
+        // Añadir hasta el límite de 30 stickers
+        val stickerBytes = TestImageBuilders.staticVp8lWebp(512, 512)
+        var latest = afterTray
+        repeat(LocalPackStore.MAX_STICKERS_PER_PACK) { idx ->
+            latest = store.addSticker(
+                identifier = created.identifier,
+                webpBytes = stickerBytes,
+                emojis = listOf("😀"),
+                accessibilityText = "Sticker $idx",
+                name = "Mi sticker $idx",
+            )!!
+        }
+        assertEquals(LocalPackStore.MAX_STICKERS_PER_PACK, latest.stickers.size)
+        assertEquals("Mi sticker 0", latest.stickers.first().name)
+        assertEquals((2 + LocalPackStore.MAX_STICKERS_PER_PACK).toString(), latest.imageDataVersion)
+
+        // El sticker 31 debe ser rechazado
+        try {
+            store.addSticker(
+                identifier = created.identifier,
+                webpBytes = stickerBytes,
+                emojis = listOf("🔥"),
+            )
+            org.junit.Assert.fail("No debería permitir más de ${LocalPackStore.MAX_STICKERS_PER_PACK} stickers.")
+        } catch (_: IllegalArgumentException) {
+            // Esperado
+        }
+    }
+
+    @Test
+    fun addSticker_replacesDefaultTrayOnlyOnFirstSticker() {
+        val packsRoot = tempFolder.newFolder("packs_autotray")
+        val autoTrayBytes = TestImageBuilders.staticVp8lWebp(96, 96)
+        var conversionCount = 0
+        val store = LocalPackStore(
+            packsRootDir = packsRoot,
+            stickerToTrayConverter = {
+                conversionCount++
+                autoTrayBytes
+            },
+        )
+
+        val created = store.createPack(name = "AutoIcono", publisher = "Yani", animated = false)
+        assertTrue(created.usesDefaultTray)
+
+        // Primer sticker: sustituye el icono por defecto y marca usesDefaultTray = false
+        val afterFirst = store.addSticker(
+            identifier = created.identifier,
+            webpBytes = TestImageBuilders.staticVp8lWebp(512, 512),
+            emojis = listOf("😀"),
+        )!!
+        assertFalse(afterFirst.usesDefaultTray)
+        assertEquals(1, conversionCount)
+        assertArrayEquals(
+            autoTrayBytes,
+            store.resolveAssetFile(created.identifier, afterFirst.trayImageFile)!!.readBytes(),
+        )
+
+        // Segundo sticker: NO vuelve a sobrescribir el icono del pack
+        val afterSecond = store.addSticker(
+            identifier = created.identifier,
+            webpBytes = TestImageBuilders.staticVp8lWebp(512, 512),
+            emojis = listOf("😂"),
+        )!!
+        assertFalse(afterSecond.usesDefaultTray)
+        assertEquals(1, conversionCount)
     }
 }

@@ -1,6 +1,7 @@
 package io.github.danivi.yanistickers.ui
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -23,6 +24,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+enum class PackSortOption(val label: String) {
+    NAME_ASC("Nombre (A–Z)"),
+    NAME_DESC("Nombre (Z–A)"),
+    CREATED_DESC("Fecha de creación (más recientes)"),
+    CREATED_ASC("Fecha de creación (más antiguos)"),
+}
+
 data class PackSummaryUi(
     val pack: StickerPack,
     val trayFile: File?,
@@ -33,6 +41,7 @@ data class PackSummaryUi(
 data class PackListUiState(
     val isLoading: Boolean = true,
     val packs: List<PackSummaryUi> = emptyList(),
+    val sortOption: PackSortOption = PackSortOption.NAME_ASC,
     val installedTargets: List<WhatsAppTarget> = emptyList(),
     val message: String? = null,
 )
@@ -43,16 +52,32 @@ data class PackListUiState(
 class PackListViewModel(application: Application) : AndroidViewModel(application) {
 
     private val store = LocalPackStore(application)
-    private val _uiState = MutableStateFlow(PackListUiState())
+    private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val _uiState = MutableStateFlow(
+        PackListUiState(sortOption = readSavedSortOption()),
+    )
     val uiState: StateFlow<PackListUiState> = _uiState.asStateFlow()
 
     init {
         refresh()
     }
 
+    fun setSortOption(option: PackSortOption) {
+        prefs.edit().putString(KEY_SORT_OPTION, option.name).apply()
+        _uiState.update { current ->
+            current.copy(
+                sortOption = option,
+                packs = sortPacks(current.packs, option),
+            )
+        }
+    }
+
     fun refresh() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true) }
+            if (_uiState.value.packs.isEmpty()) {
+                _uiState.update { it.copy(isLoading = true) }
+            }
+            val currentSort = _uiState.value.sortOption
             val loaded = withContext(Dispatchers.IO) {
                 val app = getApplication<Application>()
                 SeedPackInstaller.ensureSeedPacksInstalled(app)
@@ -65,7 +90,7 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
                         whitelistStatus = WhatsAppBridge.getWhitelistStatus(app, pack.identifier),
                     )
                 }
-                packs to targets
+                sortPacks(packs, currentSort) to targets
             }
             _uiState.update {
                 it.copy(
@@ -74,6 +99,35 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
                     installedTargets = loaded.second,
                 )
             }
+        }
+    }
+
+    private fun readSavedSortOption(): PackSortOption {
+        val raw = prefs.getString(KEY_SORT_OPTION, null) ?: return PackSortOption.NAME_ASC
+        return PackSortOption.entries.firstOrNull { it.name == raw } ?: PackSortOption.NAME_ASC
+    }
+
+    private fun sortPacks(
+        items: List<PackSummaryUi>,
+        option: PackSortOption,
+    ): List<PackSummaryUi> {
+        return when (option) {
+            PackSortOption.NAME_ASC -> items.sortedWith(
+                compareBy<PackSummaryUi, String>(String.CASE_INSENSITIVE_ORDER) { it.pack.name }
+                    .thenBy { it.pack.identifier },
+            )
+            PackSortOption.NAME_DESC -> items.sortedWith(
+                compareByDescending<PackSummaryUi, String>(String.CASE_INSENSITIVE_ORDER) { it.pack.name }
+                    .thenBy { it.pack.identifier },
+            )
+            PackSortOption.CREATED_DESC -> items.sortedWith(
+                compareByDescending<PackSummaryUi> { it.pack.createdAt }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.pack.name },
+            )
+            PackSortOption.CREATED_ASC -> items.sortedWith(
+                compareBy<PackSummaryUi> { it.pack.createdAt }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.pack.name },
+            )
         }
     }
 
@@ -160,6 +214,9 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
     }
 
     companion object {
+        private const val PREFS_NAME = "yanistickers_ui_prefs"
+        private const val KEY_SORT_OPTION = "pack_sort_option"
+
         fun factory(application: Application): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")

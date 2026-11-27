@@ -19,8 +19,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
@@ -76,6 +78,7 @@ fun PackListScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showSortMenu by remember { mutableStateOf(false) }
     var packPendingDelete by remember { mutableStateOf<PackSummaryUi?>(null) }
     var pendingExportPackId by remember { mutableStateOf<String?>(null) }
 
@@ -149,6 +152,33 @@ fun PackListScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.pack_list_title)) },
                 actions = {
+                    Box {
+                        IconButton(onClick = { showSortMenu = true }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.Sort,
+                                contentDescription = stringResource(R.string.action_sort_packs),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showSortMenu,
+                            onDismissRequest = { showSortMenu = false },
+                        ) {
+                            PackSortOption.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label) },
+                                    trailingIcon = if (state.sortOption == option) {
+                                        { Icon(Icons.Outlined.Check, contentDescription = null) }
+                                    } else {
+                                        null
+                                    },
+                                    onClick = {
+                                        showSortMenu = false
+                                        viewModel.setSortOption(option)
+                                    },
+                                )
+                            }
+                        }
+                    }
                     IconButton(onClick = onOpenBackup) {
                         Icon(
                             imageVector = Icons.Outlined.Archive,

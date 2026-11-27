@@ -9,6 +9,7 @@
   - Work phase by phase (see Phases below); do not start the next phase until the current phase's acceptance criterion passes.
   - Before starting each phase, list the files to be created or modified.
   - Keep code simple: no unnecessary dependencies.
+  - Write code comments, UI copy, and commit messages in Spanish (code identifiers/symbols remain in English).
   - The WhatsApp details in the spec were written from memory: verify limits, URIs, columns, and `ENABLE_STICKER_PACK` intent flow against the official `WhatsApp/stickers` repo before implementing, and note any discrepancies.
 
 ## Architecture & Data Model

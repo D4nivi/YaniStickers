@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "identifier": "yani_test_static_v1",
+  "name": "Yani Test Estático",
+  "publisher": "YaniStickers",
+  "animated": false,
+  "imageDataVersion": "1",
+  "trayImageFile": "tray.webp",
+  "stickers": [
+    {
+      "file": "stickers/s1.webp",
+      "emojis": [
+        "😀",
+        "✨"
+      ]
+    },
+    {
+      "file": "stickers/s2.webp",
+      "emojis": [
+        "⭐",
+        "🎉"
+      ]
+    },
+    {
+      "file": "stickers/s3.webp",
+      "emojis": [
+        "💖",
+        "🔥"
+      ]
+    }
+  ],
+  "createdAt": "2026-11-27T15:30:00Z",
+  "updatedAt": "2026-11-27T15:30:00Z"
+}

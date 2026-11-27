@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "identifier": "yani_test_animated_v1",
+  "name": "Yani Test Animado",
+  "publisher": "YaniStickers",
+  "animated": true,
+  "imageDataVersion": "1",
+  "trayImageFile": "tray.webp",
+  "stickers": [
+    {
+      "file": "stickers/a1.webp",
+      "emojis": [
+        "🎬",
+        "💜"
+      ]
+    },
+    {
+      "file": "stickers/a2.webp",
+      "emojis": [
+        "⚡",
+        "💚"
+      ]
+    },
+    {
+      "file": "stickers/a3.webp",
+      "emojis": [
+        "🚀",
+        "🔥"
+      ]
+    }
+  ],
+  "createdAt": "2026-11-27T15:30:00Z",
+  "updatedAt": "2026-11-27T15:30:00Z"
+}

@@ -1,3 +1,14 @@
 <resources>
     <string name="app_name">YaniStickers</string>
+    <string name="phase1_title">YaniStickers · Fase 1</string>
+    <string name="phase1_subtitle">Packs de prueba en filesDir/packs/ servidos por ContentProvider</string>
+    <string name="action_refresh">Recargar</string>
+    <string name="action_add_to_whatsapp">Añadir a WhatsApp</string>
+    <string name="badge_animated">Animado</string>
+    <string name="badge_static">Estático</string>
+    <string name="status_added">Añadido en WhatsApp</string>
+    <string name="status_not_added">Pendiente de añadir</string>
+    <string name="status_whatsapp_missing">No se detectó WhatsApp ni WhatsApp Business en este dispositivo.</string>
+    <string name="choose_whatsapp_title">Elige la app de destino</string>
+    <string name="cancel">Cancelar</string>
 </resources>

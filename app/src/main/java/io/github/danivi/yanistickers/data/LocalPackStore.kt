@@ -29,8 +29,18 @@ class LocalPackStore(
         val pack: StickerPack,
     )
 
+    data class ImportedPackInstallResult(
+        val outcome: ImportOutcome,
+        val pack: StickerPack,
+        val directory: File?,
+    )
+
     fun listPacks(): List<StickerPack> = synchronized(STORE_LOCK) {
         loadAll().map { it.pack }
+    }
+
+    fun listLoadedPacks(): List<LoadedPack> = synchronized(STORE_LOCK) {
+        loadAll()
     }
 
     fun getPack(identifier: String): StickerPack? = synchronized(STORE_LOCK) {
@@ -247,6 +257,149 @@ class LocalPackStore(
         loaded.directory.deleteRecursively()
     }
 
+    /**
+     * Instala en `filesDir/packs/` un pack validado previamente en [stagedDir], aplicando
+     * [conflictResolution] si ya existe otro pack con el mismo `identifier`.
+     */
+    fun installImportedPack(
+        stagedDir: File,
+        importedPack: StickerPack,
+        conflictResolution: ConflictResolution? = null,
+    ): ImportedPackInstallResult = synchronized(STORE_LOCK) {
+        ensureRootExists()
+        require(PackJsonParser.isSafeIdentifier(importedPack.identifier)) {
+            "Identificador de pack inválido: '${importedPack.identifier}'."
+        }
+
+        val existing = findLoadedPack(importedPack.identifier)
+        if (existing != null && (conflictResolution == null || conflictResolution == ConflictResolution.SKIP)) {
+            return@synchronized ImportedPackInstallResult(
+                outcome = ImportOutcome.SKIPPED,
+                pack = existing.pack,
+                directory = existing.directory,
+            )
+        }
+
+        val existingIds = loadAll().map { it.pack.identifier }.toSet()
+        val outcome: ImportOutcome
+        val finalPack: StickerPack
+
+        if (existing == null) {
+            outcome = ImportOutcome.IMPORTED
+            finalPack = importedPack.copy(
+                schemaVersion = PackJsonParser.SCHEMA_VERSION,
+                imageDataVersion = importedPack.imageDataVersion.ifBlank { "1" },
+            )
+        } else if (conflictResolution == ConflictResolution.DUPLICATE_NEW_ID) {
+            outcome = ImportOutcome.DUPLICATED
+            val newId = PackJsonParser.generateSafeIdentifier(importedPack.name, existingIds)
+            val now = nowIsoUtc()
+            finalPack = importedPack.copy(
+                schemaVersion = PackJsonParser.SCHEMA_VERSION,
+                identifier = newId,
+                imageDataVersion = "1",
+                createdAt = now,
+                updatedAt = now,
+            )
+        } else {
+            outcome = ImportOutcome.REPLACED
+            val existingVersion = existing.pack.imageDataVersion.toIntOrNull() ?: 1
+            val importedVersion = importedPack.imageDataVersion.toIntOrNull() ?: 1
+            val nextVersion = (maxOf(existingVersion, importedVersion) + 1).toString()
+            finalPack = importedPack.copy(
+                schemaVersion = PackJsonParser.SCHEMA_VERSION,
+                imageDataVersion = nextVersion,
+                updatedAt = nowIsoUtc(),
+            )
+        }
+
+        val targetDir = resolveInside(packsRootDir, finalPack.identifier)
+            ?: error("Ruta de destino inválida para '${finalPack.identifier}'.")
+
+        val tempImportDir = File(packsRootDir, ".importing_${finalPack.identifier}_${System.nanoTime()}")
+        if (tempImportDir.exists()) {
+            tempImportDir.deleteRecursively()
+        }
+
+        try {
+            copyCleanPackAssets(stagedDir = stagedDir, destDir = tempImportDir, pack = finalPack)
+            writePackJsonAtomically(tempImportDir, finalPack)
+
+            if (existing != null && outcome == ImportOutcome.REPLACED) {
+                val backupDir = File(packsRootDir, ".backup_${finalPack.identifier}_${System.nanoTime()}")
+                if (!existing.directory.renameTo(backupDir)) {
+                    existing.directory.copyRecursively(backupDir, overwrite = true)
+                    existing.directory.deleteRecursively()
+                }
+                try {
+                    moveOrCopyDirectory(tempImportDir, targetDir)
+                    backupDir.deleteRecursively()
+                } catch (t: Throwable) {
+                    if (!targetDir.exists() && backupDir.exists()) {
+                        moveOrCopyDirectory(backupDir, targetDir)
+                    }
+                    throw t
+                }
+            } else {
+                moveOrCopyDirectory(tempImportDir, targetDir)
+            }
+        } finally {
+            if (tempImportDir.exists()) {
+                tempImportDir.deleteRecursively()
+            }
+        }
+
+        ImportedPackInstallResult(
+            outcome = outcome,
+            pack = finalPack,
+            directory = targetDir,
+        )
+    }
+
+    private fun copyCleanPackAssets(stagedDir: File, destDir: File, pack: StickerPack) {
+        val stickersDestDir = File(destDir, STICKERS_DIR_NAME)
+        check(stickersDestDir.mkdirs() || stickersDestDir.isDirectory) {
+            "No se pudo crear la carpeta de stickers para '${pack.identifier}'."
+        }
+
+        val trayName = pack.trayImageFile
+        require(PackJsonParser.isSafeSingleFileName(trayName)) {
+            "Nombre de icono de bandeja inválido: '$trayName'."
+        }
+        val sourceTray = resolveInside(stagedDir, trayName)
+        require(sourceTray != null && sourceTray.isFile) {
+            "Falta el icono de bandeja '$trayName' en el paquete."
+        }
+        val destTray = resolveInside(destDir, trayName)
+            ?: error("Ruta de destino inválida para el icono '$trayName'.")
+        sourceTray.copyTo(destTray, overwrite = true)
+
+        val seenStickers = mutableSetOf<String>()
+        for (sticker in pack.stickers) {
+            val assetName = PackJsonParser.extractStickerAssetName(sticker.file)
+                ?: throw IllegalArgumentException("Ruta de sticker inválida: '${sticker.file}'.")
+            if (!seenStickers.add(assetName)) continue
+
+            val sourceSticker = resolveInside(stagedDir, "$STICKERS_DIR_NAME/$assetName")
+            require(sourceSticker != null && sourceSticker.isFile) {
+                "Falta el archivo de sticker '$assetName' en el paquete."
+            }
+            val destSticker = resolveInside(destDir, "$STICKERS_DIR_NAME/$assetName")
+                ?: error("Ruta de destino inválida para '$assetName'.")
+            sourceSticker.copyTo(destSticker, overwrite = true)
+        }
+    }
+
+    private fun moveOrCopyDirectory(sourceDir: File, targetDir: File) {
+        if (targetDir.exists()) {
+            targetDir.deleteRecursively()
+        }
+        if (!sourceDir.renameTo(targetDir)) {
+            sourceDir.copyRecursively(targetDir, overwrite = true)
+            sourceDir.deleteRecursively()
+        }
+    }
+
     private fun StickerPack.withNextEditVersion(
         name: String = this.name,
         publisher: String = this.publisher,
@@ -289,7 +442,9 @@ class LocalPackStore(
 
     private fun loadAll(): List<LoadedPack> {
         if (!packsRootDir.isDirectory) return emptyList()
-        val dirs = packsRootDir.listFiles { file -> file.isDirectory } ?: return emptyList()
+        val dirs = packsRootDir.listFiles { file ->
+            file.isDirectory && !file.name.startsWith(".")
+        } ?: return emptyList()
         return dirs
             .sortedBy { it.name }
             .mapNotNull { dir -> readPackFromDir(dir) }

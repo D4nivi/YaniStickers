@@ -4,6 +4,15 @@
     <string name="pack_list_empty_title">Aún no tienes packs</string>
     <string name="pack_list_empty_body">Crea un pack nuevo para empezar a organizar tus stickers.</string>
     <string name="action_refresh">Recargar</string>
+    <string name="action_backup">Copia de seguridad</string>
+    <string name="action_export_zip">Exportar (.zip)</string>
+    <string name="action_export_short">Exportar</string>
+    <string name="action_import_zip">Importar copia (.zip)</string>
+    <string name="backup_title">Copia de seguridad</string>
+    <string name="backup_export_title">Exportar a .zip</string>
+    <string name="backup_export_single_title">Exportar un pack concreto</string>
+    <string name="backup_import_title">Restaurar desde .zip</string>
+    <string name="backup_confirm_import">Confirmar importación</string>
     <string name="action_new_pack">Nuevo pack</string>
     <string name="action_add_to_whatsapp">Añadir a WhatsApp</string>
     <string name="action_edit">Editar</string>

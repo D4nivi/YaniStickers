@@ -1,5 +1,7 @@
 package io.github.danivi.yanistickers.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +20,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -66,12 +70,24 @@ import io.github.danivi.yanistickers.validation.PackValidator
 fun PackListScreen(
     viewModel: PackListViewModel,
     onOpenEditor: (String) -> Unit,
+    onOpenBackup: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateDialog by remember { mutableStateOf(false) }
     var packPendingDelete by remember { mutableStateOf<PackSummaryUi?>(null) }
+    var pendingExportPackId by remember { mutableStateOf<String?>(null) }
+
+    val exportSingleLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri ->
+        val packId = pendingExportPackId
+        pendingExportPackId = null
+        if (uri != null && packId != null) {
+            viewModel.exportPackToUri(packId, uri)
+        }
+    }
 
     val triggerAddToWhatsApp = rememberWhatsAppAddAction(
         installedTargets = state.installedTargets,
@@ -133,6 +149,12 @@ fun PackListScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.pack_list_title)) },
                 actions = {
+                    IconButton(onClick = onOpenBackup) {
+                        Icon(
+                            imageVector = Icons.Outlined.Archive,
+                            contentDescription = stringResource(R.string.action_backup),
+                        )
+                    }
                     IconButton(onClick = viewModel::refresh) {
                         Icon(
                             imageVector = Icons.Outlined.Refresh,
@@ -212,6 +234,10 @@ fun PackListScreen(
                                 item = item,
                                 onEdit = { onOpenEditor(item.pack.identifier) },
                                 onDuplicate = { viewModel.duplicatePack(item.pack.identifier) },
+                                onExport = {
+                                    pendingExportPackId = item.pack.identifier
+                                    exportSingleLauncher.launch("yanistickers_${item.pack.identifier}.zip")
+                                },
                                 onDelete = { packPendingDelete = item },
                                 onAddToWhatsApp = { triggerAddToWhatsApp(item.pack) },
                             )
@@ -229,6 +255,7 @@ private fun PackSummaryCard(
     item: PackSummaryUi,
     onEdit: () -> Unit,
     onDuplicate: () -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit,
     onAddToWhatsApp: () -> Unit,
 ) {
@@ -289,6 +316,14 @@ private fun PackSummaryCard(
                             onClick = {
                                 menuExpanded = false
                                 onDuplicate()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_export_zip)) },
+                            leadingIcon = { Icon(Icons.Outlined.Save, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onExport()
                             },
                         )
                         DropdownMenuItem(

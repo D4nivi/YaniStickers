@@ -6,4 +6,5 @@ package io.github.danivi.yanistickers.ui
 sealed interface AppScreen {
     data object PackList : AppScreen
     data class PackEditor(val packId: String) : AppScreen
+    data object Backup : AppScreen
 }

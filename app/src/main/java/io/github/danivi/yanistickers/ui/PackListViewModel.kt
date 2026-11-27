@@ -1,6 +1,7 @@
 package io.github.danivi.yanistickers.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -129,6 +130,28 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
                 )
             }
             refresh()
+        }
+    }
+
+    fun exportPackToUri(identifier: String, uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    exportPacksArchiveToUri(
+                        context = getApplication(),
+                        store = store,
+                        uri = uri,
+                        packIdentifiers = listOf(identifier),
+                    )
+                }
+            }
+            result.onSuccess {
+                _uiState.update { it.copy(message = "Pack exportado correctamente en .zip.") }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(message = error.message ?: "No se pudo exportar el pack.")
+                }
+            }
         }
     }
 

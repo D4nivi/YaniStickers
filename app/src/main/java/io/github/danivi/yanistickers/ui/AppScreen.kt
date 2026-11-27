@@ -11,5 +11,9 @@ sealed interface AppScreen {
         val forTray: Boolean = false,
         val sessionId: Long = System.nanoTime(),
     ) : AppScreen
+    data class AnimatedStickerCreator(
+        val packId: String,
+        val sessionId: Long = System.nanoTime(),
+    ) : AppScreen
     data object Backup : AppScreen
 }

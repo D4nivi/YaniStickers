@@ -74,6 +74,7 @@ fun PackEditorScreen(
     viewModel: PackEditorViewModel,
     onBack: () -> Unit,
     onAddStaticSticker: () -> Unit,
+    onAddAnimatedSticker: () -> Unit,
     onChangeTrayIcon: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -253,7 +254,7 @@ fun PackEditorScreen(
                                 onToggleView = viewModel::toggleViewMode,
                                 onAddSticker = {
                                     if (pack.animated) {
-                                        viewModel.notifyAddStickerUpcoming()
+                                        onAddAnimatedSticker()
                                     } else {
                                         onAddStaticSticker()
                                     }
@@ -317,7 +318,7 @@ fun PackEditorScreen(
                                 onToggleView = viewModel::toggleViewMode,
                                 onAddSticker = {
                                     if (pack.animated) {
-                                        viewModel.notifyAddStickerUpcoming()
+                                        onAddAnimatedSticker()
                                     } else {
                                         onAddStaticSticker()
                                     }
@@ -392,7 +393,7 @@ private fun StickersSectionHeader(
         }
         OutlinedButton(
             onClick = onAddSticker,
-            enabled = pack.animated || pack.stickers.size < PackValidator.MAX_STICKERS,
+            enabled = pack.stickers.size < PackValidator.MAX_STICKERS,
         ) {
             Icon(
                 imageVector = Icons.Outlined.AddPhotoAlternate,

@@ -2,6 +2,7 @@ package io.github.danivi.yanistickers.data
 
 import io.github.danivi.yanistickers.validation.ImageContainerFormat
 import io.github.danivi.yanistickers.validation.ImageContainerInspector
+import io.github.danivi.yanistickers.validation.PackValidator
 import io.github.danivi.yanistickers.validation.TestImageBuilders
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -195,5 +196,33 @@ class LocalPackStoreTest {
         )!!
         assertFalse(afterSecond.usesDefaultTray)
         assertEquals(1, conversionCount)
+    }
+
+    @Test
+    fun addAnimatedStickers_promotesDefaultTrayAndPassesValidation() {
+        val packsRoot = tempFolder.newFolder("packs_animated")
+        val autoTrayBytes = TestImageBuilders.staticVp8lWebp(96, 96)
+        val store = LocalPackStore(
+            packsRootDir = packsRoot,
+            stickerToTrayConverter = { autoTrayBytes },
+        )
+        val pack = store.createPack(name = "Pack Animado", publisher = "Yani", animated = true)
+        val animBytes = TestImageBuilders.animatedWebp(512, 512, listOf(80, 80, 80))
+
+        repeat(3) { idx ->
+            store.addSticker(
+                identifier = pack.identifier,
+                webpBytes = animBytes,
+                emojis = listOf("🎬"),
+                accessibilityText = "Animado $idx",
+            )
+        }
+
+        val loaded = store.getPack(pack.identifier)!!
+        assertTrue(loaded.animated)
+        assertFalse(loaded.usesDefaultTray)
+        assertEquals(3, loaded.stickers.size)
+        val report = PackValidator.validate(store, loaded)
+        assertTrue(report.isValid)
     }
 }

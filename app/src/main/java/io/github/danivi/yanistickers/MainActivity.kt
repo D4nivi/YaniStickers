@@ -11,6 +11,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.danivi.yanistickers.ui.AnimatedStickerCreatorScreen
+import io.github.danivi.yanistickers.ui.AnimatedStickerCreatorViewModel
 import io.github.danivi.yanistickers.ui.AppScreen
 import io.github.danivi.yanistickers.ui.BackupScreen
 import io.github.danivi.yanistickers.ui.BackupViewModel
@@ -71,6 +73,13 @@ class MainActivity : ComponentActivity() {
                                     ),
                                 )
                             },
+                            onAddAnimatedSticker = {
+                                backStack.add(
+                                    AppScreen.AnimatedStickerCreator(
+                                        packId = currentScreen.packId,
+                                    ),
+                                )
+                            },
                             onChangeTrayIcon = {
                                 backStack.add(
                                     AppScreen.StaticStickerCreator(
@@ -96,6 +105,25 @@ class MainActivity : ComponentActivity() {
                         }
                         StaticStickerCreatorScreen(
                             viewModel = creatorViewModel,
+                            onBack = {
+                                if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+                            },
+                        )
+                    }
+                    is AppScreen.AnimatedStickerCreator -> {
+                        val animatedViewModel: AnimatedStickerCreatorViewModel = viewModel(
+                            key = "animated_creator_${currentScreen.packId}",
+                            factory = AnimatedStickerCreatorViewModel.factory(
+                                application = app,
+                                packId = currentScreen.packId,
+                            ),
+                        )
+                        remember(currentScreen.sessionId) {
+                            animatedViewModel.ensureSession(currentScreen.sessionId)
+                            true
+                        }
+                        AnimatedStickerCreatorScreen(
+                            viewModel = animatedViewModel,
                             onBack = {
                                 if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
                             },

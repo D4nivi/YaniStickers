@@ -1,22 +1,12 @@
 package io.github.danivi.yanistickers.ui
 
-import android.graphics.Bitmap
-import android.graphics.Paint
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -26,16 +16,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.RotateRight
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
-import androidx.compose.material.icons.outlined.ExpandLess
-import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,32 +34,20 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.danivi.yanistickers.R
-import io.github.danivi.yanistickers.data.FramingMode
-import io.github.danivi.yanistickers.data.StaticStickerEncoder
-import io.github.danivi.yanistickers.data.StickerFramingTransform
 import io.github.danivi.yanistickers.validation.PackValidator
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StaticStickerCreatorScreen(
     viewModel: StaticStickerCreatorViewModel,
@@ -164,40 +137,12 @@ fun StaticStickerCreatorScreen(
                     onTransformGesture = viewModel::applyGesture,
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        FilterChip(
-                            selected = state.transform.mode == FramingMode.FIT,
-                            onClick = { viewModel.setFramingMode(FramingMode.FIT) },
-                            label = { Text("Encajar") },
-                        )
-                        FilterChip(
-                            selected = state.transform.mode == FramingMode.CROP,
-                            onClick = { viewModel.setFramingMode(FramingMode.CROP) },
-                            label = { Text("Rellenar") },
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = viewModel::rotate90) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Outlined.RotateRight,
-                                contentDescription = "Rotar 90°",
-                            )
-                        }
-                        IconButton(onClick = viewModel::resetTransform) {
-                            Icon(
-                                imageVector = Icons.Outlined.RestartAlt,
-                                contentDescription = "Restablecer encuadre",
-                            )
-                        }
-                    }
-                }
+                StickerFramingControlsRow(
+                    mode = state.transform.mode,
+                    onSelectMode = viewModel::setFramingMode,
+                    onRotate90 = viewModel::rotate90,
+                    onReset = viewModel::resetTransform,
+                )
 
                 EncodedSizeStatusBanner(
                     state = state,
@@ -205,48 +150,17 @@ fun StaticStickerCreatorScreen(
                 )
 
                 if (!state.forTray) {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { showAdvanced = !showAdvanced }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.creator_advanced),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                Icon(
-                                    imageVector = if (showAdvanced) {
-                                        Icons.Outlined.ExpandLess
-                                    } else {
-                                        Icons.Outlined.ExpandMore
-                                    },
-                                    contentDescription = if (showAdvanced) "Ocultar avanzado" else "Mostrar avanzado",
-                                )
-                            }
-                            AnimatedVisibility(visible = showAdvanced) {
-                                StickerMetadataEditorFields(
-                                    nameText = state.nameInput,
-                                    onNameTextChange = viewModel::onNameChange,
-                                    emojisText = state.emojisInput,
-                                    onEmojisTextChange = viewModel::onEmojisChange,
-                                    accessibilityText = state.accessibilityInput,
-                                    onAccessibilityTextChange = viewModel::onAccessibilityChange,
-                                    animatedPack = false,
-                                    modifier = Modifier.padding(
-                                        start = 16.dp,
-                                        end = 16.dp,
-                                        bottom = 16.dp,
-                                    ),
-                                )
-                            }
-                        }
-                    }
+                    AdvancedStickerMetadataCard(
+                        expanded = showAdvanced,
+                        onToggleExpanded = { showAdvanced = !showAdvanced },
+                        nameText = state.nameInput,
+                        onNameTextChange = viewModel::onNameChange,
+                        emojisText = state.emojisInput,
+                        onEmojisTextChange = viewModel::onEmojisChange,
+                        accessibilityText = state.accessibilityInput,
+                        onAccessibilityTextChange = viewModel::onAccessibilityChange,
+                        animatedPack = false,
+                    )
                 }
 
                 Button(
@@ -300,65 +214,6 @@ private fun EmptyImageSelectionCard(
                 Button(onClick = onPickImage) {
                     Text(stringResource(R.string.action_pick_image))
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StickerFramingCanvas(
-    bitmap: Bitmap,
-    transform: StickerFramingTransform,
-    onTransformGesture: (zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) -> Unit,
-) {
-    var canvasSizePx by remember { mutableFloatStateOf(0f) }
-    val drawPaint = remember {
-        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(16.dp))
-            .onSizeChanged { size ->
-                canvasSizePx = size.width.toFloat()
-            }
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    onTransformGesture(zoom, pan.x, pan.y, canvasSizePx)
-                }
-            },
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCheckerboard(cellSizePx = 16.dp.toPx())
-            val matrix = StaticStickerEncoder.buildRenderMatrix(
-                srcWidth = bitmap.width,
-                srcHeight = bitmap.height,
-                canvasSizePx = size.width,
-                transform = transform,
-            )
-            drawIntoCanvas { canvas ->
-                canvas.nativeCanvas.drawBitmap(bitmap, matrix, drawPaint)
-            }
-        }
-    }
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCheckerboard(cellSizePx: Float) {
-    val light = Color(0xFFF2F2F2)
-    val dark = Color(0xFFDCDCDC)
-    drawRect(color = light)
-    val cols = (size.width / cellSizePx).toInt() + 1
-    val rows = (size.height / cellSizePx).toInt() + 1
-    for (row in 0 until rows) {
-        for (col in 0 until cols) {
-            if ((row + col) % 2 == 1) {
-                drawRect(
-                    color = dark,
-                    topLeft = Offset(col * cellSizePx, row * cellSizePx),
-                    size = Size(cellSizePx, cellSizePx),
-                )
             }
         }
     }

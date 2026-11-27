@@ -2,10 +2,9 @@ package io.github.danivi.yanistickers.ui
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
-import android.graphics.BitmapFactory
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
@@ -43,19 +42,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil3.ImageLoader
+import coil3.compose.AsyncImage
+import coil3.gif.AnimatedImageDecoder
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import io.github.danivi.yanistickers.R
 import io.github.danivi.yanistickers.data.PackJsonParser
 import io.github.danivi.yanistickers.data.StickerPack
@@ -63,9 +65,7 @@ import io.github.danivi.yanistickers.validation.PackValidator
 import io.github.danivi.yanistickers.whatsapp.WhatsAppBridge
 import io.github.danivi.yanistickers.whatsapp.WhatsAppContract
 import io.github.danivi.yanistickers.whatsapp.WhatsAppTarget
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -144,7 +144,30 @@ fun rememberWhatsAppAddAction(
 }
 
 /**
- * Decodifica en segundo plano un archivo de imagen local (`tray` o miniatura de sticker) para la UI.
+ * Proveedor compartido de [ImageLoader] de Coil configurado con [AnimatedImageDecoder] para
+ * reproducir WebP y GIF animados en toda la interfaz sin instanciar loaders por tarjeta.
+ */
+object StickerImageLoaderProvider {
+    @Volatile
+    private var instance: ImageLoader? = null
+
+    fun get(context: Context): ImageLoader {
+        val existing = instance
+        if (existing != null) return existing
+        return synchronized(this) {
+            instance ?: ImageLoader.Builder(context.applicationContext)
+                .components {
+                    add(AnimatedImageDecoder.Factory())
+                }
+                .build()
+                .also { instance = it }
+        }
+    }
+}
+
+/**
+ * Muestra un archivo de imagen local (`tray` o sticker estático/animado) con soporte de animación
+ * mediante Coil e invalidación automática cuando el archivo cambia en disco.
  */
 @Composable
 fun LocalStickerThumbnail(
@@ -153,23 +176,26 @@ fun LocalStickerThumbnail(
     size: Dp? = null,
     modifier: Modifier = Modifier,
 ) {
-    val fileKey = file?.let { "${it.absolutePath}:${it.lastModified()}:${it.length()}" }
-    val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = fileKey) {
-        value = if (file != null && file.isFile) {
-            withContext(Dispatchers.IO) {
-                runCatching { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() }.getOrNull()
-            }
-        } else {
-            null
-        }
-    }
-
+    val context = LocalContext.current
+    val imageLoader = remember(context) { StickerImageLoaderProvider.get(context) }
     val shape = RoundedCornerShape(12.dp)
     val sizedModifier = if (size != null) modifier.size(size) else modifier.fillMaxSize()
-    if (bitmap != null) {
-        Image(
-            bitmap = bitmap!!,
+
+    if (file != null && file.isFile) {
+        val fileKey = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
+        val request = remember(fileKey) {
+            ImageRequest.Builder(context)
+                .data(file)
+                .memoryCacheKey(fileKey)
+                .diskCacheKey(fileKey)
+                .crossfade(false)
+                .build()
+        }
+        AsyncImage(
+            model = request,
+            imageLoader = imageLoader,
             contentDescription = contentDescription,
+            contentScale = ContentScale.Fit,
             modifier = sizedModifier.clip(shape),
         )
     } else {

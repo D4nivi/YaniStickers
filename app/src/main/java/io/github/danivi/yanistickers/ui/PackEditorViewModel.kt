@@ -281,14 +281,6 @@ class PackEditorViewModel(
         }
     }
 
-    fun notifyAddStickerUpcoming() {
-        _uiState.update {
-            it.copy(
-                message = "La creación e importación de stickers animados llegará en la Fase 5.",
-            )
-        }
-    }
-
     fun consumeMessage() {
         _uiState.update { it.copy(message = null) }
     }

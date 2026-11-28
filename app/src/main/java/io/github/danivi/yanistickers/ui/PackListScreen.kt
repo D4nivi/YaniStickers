@@ -1,9 +1,13 @@
 package io.github.danivi.yanistickers.ui
 
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,6 +64,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,6 +74,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -100,6 +106,7 @@ fun PackListScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val playMeow = rememberMeowSoundPlayer()
     var showCreateDialog by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
     var packPendingDelete by remember { mutableStateOf<PackSummaryUi?>(null) }
@@ -303,6 +310,7 @@ fun PackListScreen(
                         }
 
                         GatitasFooterImage(
+                            onClick = playMeow,
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
@@ -330,6 +338,7 @@ fun PackListScreen(
                         }
                         item(key = "gatitas_footer") {
                             GatitasFooterImage(
+                                onClick = playMeow,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(top = 8.dp),
@@ -513,7 +522,83 @@ private fun PackStatusBadge(
 }
 
 @Composable
-private fun GatitasFooterImage(modifier: Modifier = Modifier) {
+private fun rememberMeowSoundPlayer(): () -> Unit {
+    val context = LocalContext.current
+    val controller = remember(context) {
+        object {
+            var activePlayer: MediaPlayer? = null
+
+            fun play() {
+                if (activePlayer != null) return
+                val player = createPreparedMeowPlayer(context) ?: return
+
+                activePlayer = player
+                player.setOnCompletionListener { completed ->
+                    if (activePlayer === completed) {
+                        activePlayer = null
+                    }
+                    runCatching { completed.release() }
+                }
+                player.setOnErrorListener { errored, _, _ ->
+                    if (activePlayer === errored) {
+                        activePlayer = null
+                    }
+                    runCatching { errored.release() }
+                    true
+                }
+                runCatching { player.start() }.onFailure {
+                    if (activePlayer === player) {
+                        activePlayer = null
+                    }
+                    runCatching { player.release() }
+                }
+            }
+
+            fun release() {
+                val current = activePlayer
+                activePlayer = null
+                if (current != null) {
+                    runCatching { current.release() }
+                }
+            }
+        }
+    }
+
+    DisposableEffect(controller) {
+        onDispose {
+            controller.release()
+        }
+    }
+
+    return controller::play
+}
+
+private fun createPreparedMeowPlayer(context: android.content.Context): MediaPlayer? {
+    val player = MediaPlayer()
+    return runCatching {
+        player.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build(),
+        )
+        context.resources.openRawResourceFd(R.raw.miau).use { afd ->
+            player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+        }
+        player.prepare()
+        player
+    }.getOrElse {
+        runCatching { player.release() }
+        null
+    }
+}
+
+@Composable
+private fun GatitasFooterImage(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center,
@@ -524,7 +609,12 @@ private fun GatitasFooterImage(modifier: Modifier = Modifier) {
             contentScale = ContentScale.Fit,
             modifier = Modifier
                 .fillMaxWidth(0.7f)
-                .heightIn(max = 160.dp),
+                .heightIn(max = 160.dp)
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = onClick,
+                ),
         )
     }
 }

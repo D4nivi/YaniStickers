@@ -5,6 +5,8 @@ import io.github.danivi.yanistickers.validation.PackValidator
 import io.github.danivi.yanistickers.validation.TestImageBuilders
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -68,5 +70,42 @@ class AnimatedStickerEncoderTest {
                 ImageContainerInspector.inspectBytes(tooLongBytes),
             ),
         )
+    }
+
+    @Test
+    fun retimeAnimatedWebpIfPossible_updatesAnmfDurationsWithoutReencodingWhenWithinLimits() {
+        // 10 frames de 100 ms = 1.000 ms totales
+        val original = TestImageBuilders.animatedWebp(512, 512, List(10) { 100 })
+
+        // 2.0x -> 10 frames de 50 ms = 500 ms totales (válido sin recomprimir)
+        val faster = AnimatedStickerEncoder.retimeAnimatedWebpIfPossible(original, speedMultiplier = 2.0f)
+        assertNotNull(faster)
+        val fasterInfo = ImageContainerInspector.inspectBytes(faster!!)!!
+        assertEquals(10, fasterInfo.frameCount)
+        assertEquals(500L, fasterInfo.totalDurationMs)
+        assertTrue(fasterInfo.frameDurationsMs.all { it == 50 })
+
+        // 0.25x -> 10 frames de 400 ms = 4.000 ms totales (válido sin recomprimir)
+        val slower = AnimatedStickerEncoder.retimeAnimatedWebpIfPossible(original, speedMultiplier = 0.25f)
+        assertNotNull(slower)
+        val slowerInfo = ImageContainerInspector.inspectBytes(slower!!)!!
+        assertEquals(10, slowerInfo.frameCount)
+        assertEquals(4_000L, slowerInfo.totalDurationMs)
+        assertTrue(slowerInfo.frameDurationsMs.all { it == 400 })
+    }
+
+    @Test
+    fun retimeAnimatedWebpIfPossible_returnsNullWhenReencodingIsRequired() {
+        // Si al acelerar algún frame baja de 8 ms -> debe devolver null para fusionar frames
+        val fastFrames = TestImageBuilders.animatedWebp(512, 512, List(60) { 12 })
+        assertNull(AnimatedStickerEncoder.retimeAnimatedWebpIfPossible(fastFrames, speedMultiplier = 2.0f))
+
+        // Si al ralentizar supera los 10 s -> debe devolver null para recortar
+        val longClip = TestImageBuilders.animatedWebp(512, 512, List(40) { 100 }) // 4 s * 4 (0.25x) = 16 s
+        assertNull(AnimatedStickerEncoder.retimeAnimatedWebpIfPossible(longClip, speedMultiplier = 0.25f))
+
+        // Si al acelerar baja de 500 ms totales -> debe devolver null para poder repetir bucle si aplica
+        val shortClip = TestImageBuilders.animatedWebp(512, 512, List(10) { 60 }) // 600 ms / 2 = 300 ms
+        assertNull(AnimatedStickerEncoder.retimeAnimatedWebpIfPossible(shortClip, speedMultiplier = 2.0f))
     }
 }

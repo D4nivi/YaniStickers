@@ -3,15 +3,20 @@ package io.github.danivi.yanistickers.ui
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
+import android.media.PlaybackParams
 import android.view.Surface
 import android.view.TextureView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +36,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -38,6 +44,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -49,6 +56,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -57,6 +65,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -70,14 +80,17 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import io.github.danivi.yanistickers.R
+import io.github.danivi.yanistickers.data.AnimatedFrameExtractor
 import io.github.danivi.yanistickers.data.AnimatedSourceKind
 import io.github.danivi.yanistickers.data.AnimatedSourceProbe
+import io.github.danivi.yanistickers.data.FrameSamplingPlanner
 import io.github.danivi.yanistickers.data.FramingMode
 import io.github.danivi.yanistickers.data.FramingSnapGuides
 import io.github.danivi.yanistickers.data.StaticStickerEncoder
 import io.github.danivi.yanistickers.data.StickerFramingTransform
 import io.github.danivi.yanistickers.validation.PackValidator
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -222,7 +235,8 @@ fun AnimatedStickerCreatorScreen(
                         snapGuides = state.snapGuides,
                         isGestureActive = state.isGestureActive,
                         trimStartMs = state.trimStartMs,
-                        trimEndMs = state.trimEndMs,
+                        trimEndMs = state.effectiveTrimEndMs,
+                        speedMultiplier = state.speedMultiplier,
                         onTransformGesture = viewModel::applyGesture,
                         onTransformGestureEnd = viewModel::onTransformGestureEnd,
                     )
@@ -232,6 +246,7 @@ fun AnimatedStickerCreatorScreen(
                         transform = state.transform,
                         snapGuides = state.snapGuides,
                         isGestureActive = state.isGestureActive,
+                        speedMultiplier = state.speedMultiplier,
                         onTransformGesture = viewModel::applyGesture,
                         onTransformGestureEnd = viewModel::onTransformGestureEnd,
                     )
@@ -274,11 +289,22 @@ fun AnimatedStickerCreatorScreen(
                     VideoTrimCard(
                         totalDurationMs = probe.totalDurationMs,
                         trimStartMs = state.trimStartMs,
-                        trimEndMs = state.trimEndMs,
+                        trimEndMs = state.effectiveTrimEndMs,
+                        rawTrimEndMs = state.trimEndMs,
+                        speedMultiplier = state.speedMultiplier,
                         enabled = !state.isProbing && !state.isSaving,
                         onRangeChanged = viewModel::onTrimRangeChanged,
                     )
                 }
+
+                SpeedControlCard(
+                    speedMultiplier = state.speedMultiplier,
+                    rawScaledDurationMs = state.rawScaledDurationMs,
+                    autoLoopMultiplier = state.autoLoopMultiplier,
+                    estimatedOutputDurationMs = state.estimatedOutputDurationMs,
+                    enabled = !state.isProbing && !state.isSaving,
+                    onSpeedChange = viewModel::onSpeedChange,
+                )
 
                 AdvancedStickerMetadataCard(
                     expanded = showAdvanced,
@@ -365,6 +391,7 @@ private fun LiveVideoFramingPreviewBox(
     isGestureActive: Boolean,
     trimStartMs: Long,
     trimEndMs: Long,
+    speedMultiplier: Float,
     onTransformGesture: (zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) -> Unit,
     onTransformGestureEnd: () -> Unit,
 ) {
@@ -373,9 +400,16 @@ private fun LiveVideoFramingPreviewBox(
     var videoH by remember(probe.sourceFile.absolutePath) { mutableIntStateOf(probe.height) }
     var mediaPlayer by remember(probe.sourceFile.absolutePath) { mutableStateOf<MediaPlayer?>(null) }
     var isPrepared by remember(probe.sourceFile.absolutePath) { mutableStateOf(false) }
+    var lastAppliedTrimStart by remember(probe.sourceFile.absolutePath) { mutableLongStateOf(-1L) }
+    var appliedSpeed by remember(probe.sourceFile.absolutePath) { mutableFloatStateOf(1f) }
+    var nativeSpeedSupported by remember(probe.sourceFile.absolutePath) { mutableStateOf(true) }
 
+    val isFullClipLoop = trimStartMs == 0L && trimEndMs >= probe.totalDurationMs - 40L
     val latestTrimStart by rememberUpdatedState(trimStartMs)
     val latestTrimEnd by rememberUpdatedState(trimEndMs)
+    val latestIsFullClipLoop by rememberUpdatedState(isFullClipLoop)
+    val latestSpeed by rememberUpdatedState(speedMultiplier)
+    val latestNativeSpeedSupported by rememberUpdatedState(nativeSpeedSupported)
     val latestTransform by rememberUpdatedState(transform)
 
     DisposableEffect(probe.sourceFile.absolutePath) {
@@ -389,27 +423,65 @@ private fun LiveVideoFramingPreviewBox(
     LaunchedEffect(probe.sourceFile.absolutePath, isPrepared) {
         val player = mediaPlayer ?: return@LaunchedEffect
         if (!isPrepared) return@LaunchedEffect
+        var manualStepCursorMs = latestTrimStart
         while (true) {
-            runCatching {
-                val pos = player.currentPosition.toLong()
-                if (pos >= latestTrimEnd || pos < latestTrimStart - 250L) {
-                    player.seekTo(latestTrimStart, MediaPlayer.SEEK_CLOSEST)
-                    if (!player.isPlaying) {
+            if (!latestNativeSpeedSupported && abs(latestSpeed - 1f) >= 0.001f) {
+                val frameIntervalMs = 45L
+                val advanceMs = (frameIntervalMs * latestSpeed).roundToLong().coerceAtLeast(16L)
+                manualStepCursorMs += advanceMs
+                if (manualStepCursorMs >= latestTrimEnd || manualStepCursorMs < latestTrimStart) {
+                    manualStepCursorMs = latestTrimStart
+                }
+                runCatching {
+                    if (player.isPlaying) player.pause()
+                    player.seekTo(manualStepCursorMs, MediaPlayer.SEEK_CLOSEST)
+                }
+                delay(frameIntervalMs)
+            } else {
+                runCatching {
+                    val pos = player.currentPosition.toLong()
+                    if (!latestIsFullClipLoop && (pos >= latestTrimEnd || pos < latestTrimStart - 250L)) {
+                        player.seekTo(latestTrimStart, MediaPlayer.SEEK_CLOSEST)
+                        if (!player.isPlaying) {
+                            player.start()
+                        }
+                    } else if (!player.isPlaying) {
                         player.start()
                     }
-                } else if (!player.isPlaying) {
-                    player.start()
                 }
+                delay(40)
             }
-            delay(75)
+        }
+    }
+
+    LaunchedEffect(isFullClipLoop, isPrepared) {
+        val player = mediaPlayer ?: return@LaunchedEffect
+        if (isPrepared) {
+            runCatching { player.isLooping = isFullClipLoop }
         }
     }
 
     LaunchedEffect(trimStartMs, isPrepared) {
         val player = mediaPlayer ?: return@LaunchedEffect
-        if (isPrepared) {
+        if (isPrepared && trimStartMs != lastAppliedTrimStart) {
+            lastAppliedTrimStart = trimStartMs
             runCatching {
                 player.seekTo(trimStartMs, MediaPlayer.SEEK_CLOSEST)
+            }
+        }
+    }
+
+    LaunchedEffect(speedMultiplier, isPrepared) {
+        val player = mediaPlayer ?: return@LaunchedEffect
+        if (!isPrepared) return@LaunchedEffect
+        if (abs(speedMultiplier - appliedSpeed) < 0.001f && nativeSpeedSupported) return@LaunchedEffect
+        delay(60)
+        val ok = applyMediaPlayerSpeed(player, speedMultiplier)
+        nativeSpeedSupported = ok
+        appliedSpeed = speedMultiplier
+        if (ok) {
+            runCatching {
+                if (!player.isPlaying) player.start()
             }
         }
     }
@@ -449,7 +521,15 @@ private fun LiveVideoFramingPreviewBox(
                                 mp.setDataSource(probe.sourceFile.absolutePath)
                                 mp.setSurface(surf)
                                 mp.setVolume(0f, 0f)
-                                mp.isLooping = latestTrimStart == 0L && latestTrimEnd >= probe.totalDurationMs
+                                mp.isLooping = latestIsFullClipLoop
+                                mp.setOnCompletionListener { completed ->
+                                    if (!latestIsFullClipLoop) {
+                                        runCatching {
+                                            completed.seekTo(latestTrimStart, MediaPlayer.SEEK_CLOSEST)
+                                            completed.start()
+                                        }
+                                    }
+                                }
                                 mp.setOnVideoSizeChangedListener { _, w, h ->
                                     if (w > 0 && h > 0) {
                                         videoW = w
@@ -464,9 +544,19 @@ private fun LiveVideoFramingPreviewBox(
                                     }
                                 }
                                 mp.setOnPreparedListener { prepared ->
-                                    isPrepared = true
-                                    prepared.seekTo(latestTrimStart, MediaPlayer.SEEK_CLOSEST)
+                                    lastAppliedTrimStart = latestTrimStart
+                                    if (latestTrimStart > 0L) {
+                                        prepared.seekTo(latestTrimStart, MediaPlayer.SEEK_CLOSEST)
+                                    }
                                     prepared.start()
+                                    val speedOk = if (abs(latestSpeed - 1f) >= 0.001f) {
+                                        applyMediaPlayerSpeed(prepared, latestSpeed)
+                                    } else {
+                                        true
+                                    }
+                                    nativeSpeedSupported = speedOk
+                                    appliedSpeed = latestSpeed
+                                    isPrepared = true
                                 }
                                 mp.prepareAsync()
                             }
@@ -506,6 +596,22 @@ private fun LiveVideoFramingPreviewBox(
     }
 }
 
+private fun applyMediaPlayerSpeed(player: MediaPlayer, speed: Float): Boolean {
+    val withMuteFallback = runCatching {
+        player.playbackParams = PlaybackParams()
+            .setSpeed(speed)
+            .setPitch(1.0f)
+            .setAudioFallbackMode(PlaybackParams.AUDIO_FALLBACK_MODE_MUTE)
+        abs(player.playbackParams.speed - speed) < 0.08f
+    }.getOrDefault(false)
+    if (withMuteFallback) return true
+
+    return runCatching {
+        player.playbackParams = PlaybackParams().setSpeed(speed)
+        abs(player.playbackParams.speed - speed) < 0.08f
+    }.getOrDefault(false)
+}
+
 private fun applyTextureViewTransform(
     textureView: TextureView,
     videoW: Int,
@@ -536,12 +642,28 @@ private fun LiveAnimatedImageFramingPreviewBox(
     transform: StickerFramingTransform,
     snapGuides: FramingSnapGuides,
     isGestureActive: Boolean,
+    speedMultiplier: Float,
     onTransformGesture: (zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) -> Unit,
     onTransformGestureEnd: () -> Unit,
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { StickerImageLoaderProvider.get(context) }
     var canvasSizePx by remember { mutableFloatStateOf(0f) }
+    val useCustomSpeedPlayer = abs(speedMultiplier - FrameSamplingPlanner.DEFAULT_SPEED_MULTIPLIER) >= 0.001f
+    var speedPreviewFrame by remember(probe.sourceFile.absolutePath) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(probe.sourceFile.absolutePath, speedMultiplier, useCustomSpeedPlayer) {
+        if (!useCustomSpeedPlayer) {
+            speedPreviewFrame = null
+            return@LaunchedEffect
+        }
+        AnimatedFrameExtractor.playAnimatedPreviewLoop(
+            probe = probe,
+            speedMultiplier = speedMultiplier,
+        ) { bmp ->
+            speedPreviewFrame = bmp.asImageBitmap()
+        }
+    }
 
     val request = remember(probe.sourceFile.absolutePath) {
         ImageRequest.Builder(context)
@@ -584,21 +706,34 @@ private fun LiveAnimatedImageFramingPreviewBox(
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawTransparencyCheckerboard(cellSizePx = 16.dp.toPx())
         }
-        AsyncImage(
-            model = request,
-            imageLoader = imageLoader,
-            contentDescription = "Vista previa animada",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = scaleMultiplier
-                    scaleY = scaleMultiplier
-                    rotationZ = safeTransform.rotationDegrees.toFloat()
-                    translationX = safeTransform.normalizedPanX * canvasSizePx
-                    translationY = safeTransform.normalizedPanY * canvasSizePx
-                },
-        )
+        val contentModifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                scaleX = scaleMultiplier
+                scaleY = scaleMultiplier
+                rotationZ = safeTransform.rotationDegrees.toFloat()
+                translationX = safeTransform.normalizedPanX * canvasSizePx
+                translationY = safeTransform.normalizedPanY * canvasSizePx
+            }
+        if (useCustomSpeedPlayer) {
+            val frameBitmap = speedPreviewFrame ?: remember(probe.previewBitmap) {
+                probe.previewBitmap.asImageBitmap()
+            }
+            Image(
+                bitmap = frameBitmap,
+                contentDescription = "Vista previa animada",
+                contentScale = ContentScale.Fit,
+                modifier = contentModifier,
+            )
+        } else {
+            AsyncImage(
+                model = request,
+                imageLoader = imageLoader,
+                contentDescription = "Vista previa animada",
+                contentScale = ContentScale.Fit,
+                modifier = contentModifier,
+            )
+        }
         FramingSnapGuidesOverlay(
             guides = snapGuides,
             isGestureActive = isGestureActive,
@@ -611,6 +746,8 @@ private fun VideoTrimCard(
     totalDurationMs: Long,
     trimStartMs: Long,
     trimEndMs: Long,
+    rawTrimEndMs: Long,
+    speedMultiplier: Float,
     enabled: Boolean,
     onRangeChanged: (Long, Long) -> Unit,
 ) {
@@ -619,6 +756,7 @@ private fun VideoTrimCard(
     val startVal = trimStartMs.toFloat().coerceIn(0f, maxDuration)
     val endVal = trimEndMs.toFloat().coerceIn(startVal, maxDuration)
     val selectedDurationMs = (trimEndMs - trimStartMs).coerceAtLeast(0L)
+    val maxSourceSpanMs = FrameSamplingPlanner.maxSourceDurationForSpeed(speedMultiplier)
     val canTrim = safeTotalMs > 250L
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -632,7 +770,7 @@ private fun VideoTrimCard(
                 text = if (canTrim) {
                     "Tramo del vídeo: ${PackValidator.formatSeconds(trimStartMs)} – " +
                         "${PackValidator.formatSeconds(trimEndMs)} " +
-                        "(${PackValidator.formatSeconds(selectedDurationMs)} / máx. 10 s)"
+                        "(${PackValidator.formatSeconds(selectedDurationMs)} / máx. ${PackValidator.formatSeconds(maxSourceSpanMs)})"
                 } else {
                     "Duración del vídeo: ${PackValidator.formatSeconds(safeTotalMs)} " +
                         "(se repetirá en bucle al guardar)"
@@ -640,6 +778,13 @@ private fun VideoTrimCard(
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
             )
+            if (trimEndMs < rawTrimEndMs) {
+                Text(
+                    text = "Recortado al máximo de 10 s finales a ${FrameSamplingPlanner.formatSpeedMultiplier(speedMultiplier)}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (canTrim) {
                 RangeSlider(
                     value = startVal..endVal,
@@ -648,6 +793,75 @@ private fun VideoTrimCard(
                     },
                     valueRange = 0f..maxDuration,
                     enabled = enabled,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SpeedControlCard(
+    speedMultiplier: Float,
+    rawScaledDurationMs: Long,
+    autoLoopMultiplier: Int,
+    estimatedOutputDurationMs: Long,
+    enabled: Boolean,
+    onSpeedChange: (Float) -> Unit,
+) {
+    val presets = remember { listOf(0.25f, 0.5f, 1.0f, 1.5f, 2.0f) }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Velocidad: ${FrameSamplingPlanner.formatSpeedMultiplier(speedMultiplier)}",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "Salida: ${PackValidator.formatSeconds(estimatedOutputDurationMs)} / máx. 10 s",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Slider(
+                value = speedMultiplier.coerceIn(
+                    FrameSamplingPlanner.MIN_SPEED_MULTIPLIER,
+                    FrameSamplingPlanner.MAX_SPEED_MULTIPLIER,
+                ),
+                onValueChange = onSpeedChange,
+                valueRange = FrameSamplingPlanner.MIN_SPEED_MULTIPLIER..FrameSamplingPlanner.MAX_SPEED_MULTIPLIER,
+                steps = 34,
+                enabled = enabled,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                presets.forEach { preset ->
+                    FilterChip(
+                        selected = abs(speedMultiplier - preset) < 0.01f,
+                        onClick = { onSpeedChange(preset) },
+                        enabled = enabled,
+                        label = { Text(FrameSamplingPlanner.formatSpeedMultiplier(preset)) },
+                    )
+                }
+            }
+            if (autoLoopMultiplier > 1) {
+                Text(
+                    text = "Duración resultante (${PackValidator.formatSeconds(rawScaledDurationMs)}) menor al mínimo de 0.50 s: " +
+                        "se repetirá ${autoLoopMultiplier}x en bucle (${PackValidator.formatSeconds(estimatedOutputDurationMs)}).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
                 )
             }
         }

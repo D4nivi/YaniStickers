@@ -10,6 +10,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
+import kotlin.math.abs
+import kotlin.math.roundToLong
 
 /**
  * Resultado de generar o importar un sticker animado validado frente a los límites de WhatsApp.
@@ -136,13 +138,21 @@ object AnimatedStickerEncoder {
         trimStartMs: Long,
         trimEndMs: Long,
         sessionDir: File,
+        speedMultiplier: Float = FrameSamplingPlanner.DEFAULT_SPEED_MULTIPLIER,
         allowDirectPassthrough: Boolean = true,
         onProgress: (progress: Float, status: String) -> Unit = { _, _ -> },
     ): EncodedAnimatedWebpResult {
         currentCoroutineContext().ensureActive()
 
-        // Passthrough instantáneo para WebP animado ya válido (≥ 500 ms) sin cambios de encuadre
+        val safeSpeed = speedMultiplier.coerceIn(
+            FrameSamplingPlanner.MIN_SPEED_MULTIPLIER,
+            FrameSamplingPlanner.MAX_SPEED_MULTIPLIER,
+        )
+        val isDefaultSpeed = abs(safeSpeed - 1f) < 0.001f
+
+        // Passthrough instantáneo para WebP animado ya válido (≥ 500 ms) sin cambios de encuadre ni velocidad
         if (allowDirectPassthrough &&
+            isDefaultSpeed &&
             probe.isDirectValidWebp &&
             probe.totalDurationMs >= MIN_RECOMMENDED_ANIMATION_MS &&
             transform.normalized() == StickerFramingTransform(mode = FramingMode.FIT)
@@ -166,10 +176,14 @@ object AnimatedStickerEncoder {
 
         val sizePx = PackValidator.STICKER_DIMENSION_PX
         val rawFramesFile = File(sessionDir, "frames_${System.nanoTime()}.rgba")
-        val selectedDurationMs = (trimEndMs - trimStartMs).coerceIn(250L, PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS)
-        val initialFps = chooseInitialVideoFps(selectedDurationMs)
+        val maxSourceSpanMs = FrameSamplingPlanner.maxSourceDurationForSpeed(safeSpeed)
+        val effectiveSourceSpanMs = (trimEndMs - trimStartMs).coerceIn(1L, maxSourceSpanMs)
+        val selectedOutputDurationMs = (effectiveSourceSpanMs / safeSpeed.toDouble())
+            .roundToLong()
+            .coerceIn(250L, PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS)
+        val initialFps = chooseInitialVideoFps(selectedOutputDurationMs)
         val estimatedCount = if (probe.kind == AnimatedSourceKind.VIDEO) {
-            ((selectedDurationMs / 1000.0) * initialFps).toInt().coerceAtLeast(2)
+            ((selectedOutputDurationMs / 1000.0) * initialFps).toInt().coerceAtLeast(2)
         } else {
             probe.frameDurationsMs.size.coerceAtLeast(2)
         }
@@ -202,6 +216,7 @@ object AnimatedStickerEncoder {
                         trimStartMs = trimStartMs,
                         trimEndMs = trimEndMs,
                         videoFps = initialFps,
+                        speedMultiplier = safeSpeed,
                     ) { idx, totalEst, durationMs, directRgbaBuffer ->
                         writer.writeBuffer(directRgbaBuffer)
                         encoder.addRgbaBufferFrame(
@@ -384,6 +399,123 @@ object AnimatedStickerEncoder {
             }
             return encoder.finish()
         }
+    }
+
+    /**
+     * Ajusta la velocidad de un WebP animado ya válido (`512×512`, `≤ 500 KB`) reescribiendo
+     * directamente las duraciones de cada chunk `ANMF` sin recomprimir, siempre que el resultado
+     * siga cumpliendo todos los límites de WhatsApp y la duración mínima recomendada (`500 ms`).
+     * Devuelve `null` si hace falta fusionar frames, recortar a 10 s o añadir bucles.
+     */
+    fun retimeAnimatedWebpIfPossible(
+        bytes: ByteArray,
+        speedMultiplier: Float,
+    ): ByteArray? {
+        val safeSpeed = speedMultiplier.coerceIn(
+            FrameSamplingPlanner.MIN_SPEED_MULTIPLIER,
+            FrameSamplingPlanner.MAX_SPEED_MULTIPLIER,
+        )
+        if (bytes.size < 12 || bytes.size.toLong() > PackValidator.MAX_ANIMATED_STICKER_BYTES) {
+            return null
+        }
+        val info = ImageContainerInspector.inspectBytes(bytes) ?: return null
+        if (info.format != ImageContainerFormat.WEBP ||
+            !info.isAnimated ||
+            info.frameCount <= 1 ||
+            info.width != PackValidator.STICKER_DIMENSION_PX ||
+            info.height != PackValidator.STICKER_DIMENSION_PX
+        ) {
+            return null
+        }
+
+        if (abs(safeSpeed - 1f) < 0.001f) {
+            return if (info.totalDurationMs <= PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS &&
+                (info.minFrameDurationMs ?: 0) >= PackValidator.MIN_ANIMATED_FRAME_DURATION_MS
+            ) {
+                bytes
+            } else {
+                null
+            }
+        }
+
+        val durationOffsets = collectAnmfDurationOffsets(bytes) ?: return null
+        if (durationOffsets.size != info.frameCount) return null
+
+        val scaledDurations = FrameSamplingPlanner.scaleFrameDurations(
+            sourceDurationsMs = info.frameDurationsMs,
+            speedMultiplier = safeSpeed,
+        )
+        if (scaledDurations.size != durationOffsets.size) return null
+        if (scaledDurations.any { it < PackValidator.MIN_ANIMATED_FRAME_DURATION_MS || it > 0xFFFFFF }) {
+            return null
+        }
+        val totalDurationMs = scaledDurations.fold(0L) { acc, d -> acc + d.toLong() }
+        if (totalDurationMs < MIN_RECOMMENDED_ANIMATION_MS ||
+            totalDurationMs > PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS
+        ) {
+            return null
+        }
+
+        val updated = bytes.copyOf()
+        for (i in durationOffsets.indices) {
+            val offset = durationOffsets[i]
+            val dur = scaledDurations[i]
+            updated[offset] = (dur and 0xFF).toByte()
+            updated[offset + 1] = ((dur ushr 8) and 0xFF).toByte()
+            updated[offset + 2] = ((dur ushr 16) and 0xFF).toByte()
+        }
+
+        val verified = ImageContainerInspector.inspectBytes(updated) ?: return null
+        if (verified.frameCount != info.frameCount || verified.totalDurationMs != totalDurationMs) {
+            return null
+        }
+        return updated
+    }
+
+    private fun collectAnmfDurationOffsets(bytes: ByteArray): List<Int>? {
+        if (bytes.size < 12) return null
+        if (bytes[0] != 'R'.code.toByte() ||
+            bytes[1] != 'I'.code.toByte() ||
+            bytes[2] != 'F'.code.toByte() ||
+            bytes[3] != 'F'.code.toByte() ||
+            bytes[8] != 'W'.code.toByte() ||
+            bytes[9] != 'E'.code.toByte() ||
+            bytes[10] != 'B'.code.toByte() ||
+            bytes[11] != 'P'.code.toByte()
+        ) {
+            return null
+        }
+
+        val riffSize = (bytes[4].toLong() and 0xFFL) or
+            ((bytes[5].toLong() and 0xFFL) shl 8) or
+            ((bytes[6].toLong() and 0xFFL) shl 16) or
+            ((bytes[7].toLong() and 0xFFL) shl 24)
+        val limit = 8L + riffSize
+        if (riffSize < 4L || limit > bytes.size.toLong()) return null
+
+        val offsets = mutableListOf<Int>()
+        var offset = 12L
+        while (offset + 8L <= limit) {
+            val pos = offset.toInt()
+            val chunkSize = (bytes[pos + 4].toLong() and 0xFFL) or
+                ((bytes[pos + 5].toLong() and 0xFFL) shl 8) or
+                ((bytes[pos + 6].toLong() and 0xFFL) shl 16) or
+                ((bytes[pos + 7].toLong() and 0xFFL) shl 24)
+            val dataStart = offset + 8L
+            val dataEnd = dataStart + chunkSize
+            if (dataEnd > limit) return null
+
+            if (bytes[pos] == 'A'.code.toByte() &&
+                bytes[pos + 1] == 'N'.code.toByte() &&
+                bytes[pos + 2] == 'M'.code.toByte() &&
+                bytes[pos + 3] == 'F'.code.toByte()
+            ) {
+                if (chunkSize < 16L) return null
+                offsets += (dataStart.toInt() + 12)
+            }
+            offset = dataEnd + (chunkSize and 1L)
+        }
+        return offsets
     }
 
     private fun verifyAnimatedWebp(bytes: ByteArray) =

@@ -10,6 +10,7 @@ import io.github.danivi.yanistickers.data.AnimatedFrameExtractor
 import io.github.danivi.yanistickers.data.AnimatedSourceKind
 import io.github.danivi.yanistickers.data.AnimatedSourceProbe
 import io.github.danivi.yanistickers.data.AnimatedStickerEncoder
+import io.github.danivi.yanistickers.data.FrameSamplingPlanner
 import io.github.danivi.yanistickers.data.FramingMode
 import io.github.danivi.yanistickers.data.FramingSnapGuides
 import io.github.danivi.yanistickers.data.LocalPackStore
@@ -29,8 +30,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToLong
 
 data class AnimatedStickerCreatorUiState(
     val isEditMode: Boolean = false,
@@ -46,6 +49,7 @@ data class AnimatedStickerCreatorUiState(
     val isGestureActive: Boolean = false,
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = 0L,
+    val speedMultiplier: Float = FrameSamplingPlanner.DEFAULT_SPEED_MULTIPLIER,
     val nameInput: String = "",
     val emojisInput: String = "🎬",
     val accessibilityInput: String = "",
@@ -54,6 +58,45 @@ data class AnimatedStickerCreatorUiState(
 ) {
     val isVideoSource: Boolean
         get() = probe?.kind == AnimatedSourceKind.VIDEO
+
+    val maxSourceTrimSpanMs: Long
+        get() = FrameSamplingPlanner.maxSourceDurationForSpeed(speedMultiplier)
+
+    val effectiveTrimEndMs: Long
+        get() {
+            val currentProbe = probe ?: return trimEndMs
+            if (currentProbe.kind != AnimatedSourceKind.VIDEO) return trimEndMs
+            return min(trimEndMs, trimStartMs + maxSourceTrimSpanMs)
+        }
+
+    val rawScaledDurationMs: Long
+        get() {
+            val currentProbe = probe ?: return 0L
+            val safeSpeed = speedMultiplier.coerceIn(
+                FrameSamplingPlanner.MIN_SPEED_MULTIPLIER,
+                FrameSamplingPlanner.MAX_SPEED_MULTIPLIER,
+            ).toDouble()
+            val rawOutputMs = if (currentProbe.kind == AnimatedSourceKind.VIDEO) {
+                val spanMs = (effectiveTrimEndMs - trimStartMs).coerceAtLeast(0L)
+                (spanMs / safeSpeed).roundToLong()
+            } else {
+                FrameSamplingPlanner.scaleFrameDurations(
+                    sourceDurationsMs = currentProbe.frameDurationsMs,
+                    speedMultiplier = speedMultiplier,
+                ).fold(0L) { acc, d -> acc + d.toLong() }
+            }
+            return rawOutputMs.coerceAtMost(PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS)
+        }
+
+    val autoLoopMultiplier: Int
+        get() = AnimatedStickerEncoder.computeShortLoopMultiplier(rawScaledDurationMs)
+
+    val estimatedOutputDurationMs: Long
+        get() {
+            val raw = rawScaledDurationMs
+            if (raw <= 0L) return 0L
+            return (raw * autoLoopMultiplier).coerceAtMost(PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS)
+        }
 
     val canSave: Boolean
         get() {
@@ -169,6 +212,7 @@ class AnimatedStickerCreatorViewModel(
                     isGestureActive = false,
                     trimStartMs = 0L,
                     trimEndMs = initialEnd,
+                    speedMultiplier = FrameSamplingPlanner.DEFAULT_SPEED_MULTIPLIER,
                     nameInput = item?.name ?: state.nameInput,
                     emojisInput = item?.emojis?.joinToString(" ") ?: state.emojisInput,
                     accessibilityInput = item?.accessibilityText ?: state.accessibilityInput,
@@ -215,6 +259,7 @@ class AnimatedStickerCreatorViewModel(
                         isGestureActive = false,
                         trimStartMs = 0L,
                         trimEndMs = initialEnd,
+                        speedMultiplier = FrameSamplingPlanner.DEFAULT_SPEED_MULTIPLIER,
                     )
                 }
             }.onFailure { error ->
@@ -295,14 +340,21 @@ class AnimatedStickerCreatorViewModel(
         }
     }
 
+    fun onSpeedChange(speed: Float) {
+        val normalized = FrameSamplingPlanner.normalizeSpeedMultiplier(speed)
+        _uiState.update { it.copy(speedMultiplier = normalized) }
+    }
+
     fun onTrimRangeChanged(startMs: Long, endMs: Long) {
-        val probe = _uiState.value.probe ?: return
+        val state = _uiState.value
+        val probe = state.probe ?: return
         val maxTotal = probe.totalDurationMs.coerceAtLeast(1L)
         val effectiveMinSpan = min(MIN_TRIM_SPAN_MS, maxTotal)
         val clampedStart = startMs.coerceIn(0L, max(0L, maxTotal - effectiveMinSpan))
         var clampedEnd = endMs.coerceIn(clampedStart + effectiveMinSpan, maxTotal)
-        if (clampedEnd - clampedStart > PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS) {
-            clampedEnd = clampedStart + PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS
+        val maxSpan = state.maxSourceTrimSpanMs
+        if (clampedEnd - clampedStart > maxSpan) {
+            clampedEnd = clampedStart + maxSpan
         }
         _uiState.update {
             it.copy(
@@ -338,7 +390,12 @@ class AnimatedStickerCreatorViewModel(
         val emojis = PackJsonParser.splitEmojisGraphemes(current.emojisInput)
         val editIndex = editingStickerIndex?.takeIf { current.isEditMode }
         val framingChanged = current.transform.normalized() != StickerFramingTransform(mode = FramingMode.FIT)
-        val canSkipReencode = editIndex != null && !current.hasReplacedSource && !framingChanged && probe.isDirectValidWebp
+        val speedChanged = abs(current.speedMultiplier - FrameSamplingPlanner.DEFAULT_SPEED_MULTIPLIER) >= 0.001f
+        val canSkipReencode = editIndex != null &&
+            !current.hasReplacedSource &&
+            !framingChanged &&
+            !speedChanged &&
+            probe.isDirectValidWebp
 
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
@@ -363,6 +420,43 @@ class AnimatedStickerCreatorViewModel(
                 return@launch
             }
 
+            if (editIndex != null &&
+                !current.hasReplacedSource &&
+                !framingChanged &&
+                speedChanged &&
+                probe.kind == AnimatedSourceKind.WEBP
+            ) {
+                val retimedBytes = withContext(Dispatchers.IO) {
+                    runCatching {
+                        AnimatedStickerEncoder.retimeAnimatedWebpIfPossible(
+                            bytes = probe.sourceFile.readBytes(),
+                            speedMultiplier = current.speedMultiplier,
+                        )
+                    }.getOrNull()
+                }
+                if (retimedBytes != null) {
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            store.replaceSticker(
+                                identifier = packId,
+                                stickerIndex = editIndex,
+                                webpBytes = retimedBytes,
+                                emojis = emojis,
+                                accessibilityText = current.accessibilityInput,
+                                name = current.nameInput,
+                            ) ?: error("No se encontró el sticker en el pack.")
+                        }
+                    }.onSuccess {
+                        _uiState.update { it.copy(saved = true) }
+                    }.onFailure { error ->
+                        _uiState.update {
+                            it.copy(message = error.message ?: "No se pudo guardar el sticker animado.")
+                        }
+                    }
+                    return@launch
+                }
+            }
+
             _uiState.update {
                 it.copy(
                     isSaving = true,
@@ -376,8 +470,9 @@ class AnimatedStickerCreatorViewModel(
                         probe = probe,
                         transform = current.transform,
                         trimStartMs = current.trimStartMs,
-                        trimEndMs = current.trimEndMs,
+                        trimEndMs = current.effectiveTrimEndMs,
                         sessionDir = sessionDir,
+                        speedMultiplier = current.speedMultiplier,
                         onProgress = { progress, status ->
                             _uiState.update { state ->
                                 state.copy(

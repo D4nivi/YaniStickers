@@ -52,4 +52,51 @@ class FrameSamplingPlannerTest {
         assertTrue(total <= PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS)
         assertTrue(planned.all { it.outputDurationMs >= PackValidator.MIN_ANIMATED_FRAME_DURATION_MS })
     }
+
+    @Test
+    fun buildVideoSamplePoints_supportsSpeedUpAndSlowDownWithinWhatsAppLimits() {
+        // A 2.0x, un tramo de 20 s cabe íntegramente en 10 s de salida
+        val fastPoints = FrameSamplingPlanner.buildVideoSamplePoints(
+            startMs = 0L,
+            endMs = 20_000L,
+            targetFps = 10,
+            speedMultiplier = 2.0f,
+        )
+        assertTrue(fastPoints.size >= 2)
+        assertEquals(PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS, fastPoints.sumOf { it.outputDurationMs.toLong() })
+        assertTrue(fastPoints.last().timestampMs > 15_000L)
+        assertTrue(fastPoints.all { it.outputDurationMs >= PackValidator.MIN_ANIMATED_FRAME_DURATION_MS })
+
+        // A 0.25x, un tramo de 1 s se estira a 4 s de salida
+        val slowPoints = FrameSamplingPlanner.buildVideoSamplePoints(
+            startMs = 1_000L,
+            endMs = 2_000L,
+            targetFps = 15,
+            speedMultiplier = 0.25f,
+        )
+        assertTrue(slowPoints.size >= 2)
+        assertEquals(4_000L, slowPoints.sumOf { it.outputDurationMs.toLong() })
+        assertEquals(1_000L, slowPoints.first().timestampMs)
+        assertTrue(slowPoints.last().timestampMs < 2_000L)
+    }
+
+    @Test
+    fun scaleFrameDurations_preservesExactDurationAndMergesSub8msFramesOnSpeedUp() {
+        // 100 frames de 10 ms = 1.000 ms; a 2.0x son 500 ms totales y deben fusionarse para >= 8 ms/frame
+        val source = List(100) { 10 }
+        val scaled = FrameSamplingPlanner.scaleFrameDurations(source, speedMultiplier = 2.0f)
+        assertEquals(500, scaled.sum())
+
+        val planned = FrameSamplingPlanner.planFrameSampling(
+            sourceDurationsMs = scaled,
+            maxTotalDurationMs = PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS,
+            targetMaxFps = null,
+        )
+        assertEquals(500, planned.sumOf { it.outputDurationMs })
+        assertTrue(planned.all { it.outputDurationMs >= PackValidator.MIN_ANIMATED_FRAME_DURATION_MS })
+
+        // A 0.25x, 10 frames de 50 ms (500 ms) pasan a 2.000 ms
+        val slowed = FrameSamplingPlanner.scaleFrameDurations(List(10) { 50 }, speedMultiplier = 0.25f)
+        assertEquals(2_000, slowed.sum())
+    }
 }

@@ -11,6 +11,12 @@ import io.github.danivi.yanistickers.validation.ImageContainerFormat
 import io.github.danivi.yanistickers.validation.ImageContainerInspector
 import io.github.danivi.yanistickers.validation.InspectedImageInfo
 import io.github.danivi.yanistickers.validation.PackValidator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -162,6 +168,7 @@ object AnimatedFrameExtractor {
         trimStartMs: Long,
         trimEndMs: Long,
         videoFps: Int,
+        speedMultiplier: Float = FrameSamplingPlanner.DEFAULT_SPEED_MULTIPLIER,
         onFrameRgba: (index: Int, totalEstimated: Int, durationMs: Int, directRgbaBuffer: java.nio.ByteBuffer) -> Unit,
     ): List<Int> {
         return when (probe.kind) {
@@ -171,13 +178,14 @@ object AnimatedFrameExtractor {
                 trimStartMs = trimStartMs,
                 trimEndMs = trimEndMs,
                 targetFps = videoFps,
+                speedMultiplier = speedMultiplier,
                 onFrameRgba = onFrameRgba,
             )
             AnimatedSourceKind.WEBP -> streamBitmapSourceAsRgba(probe, transform, onFrameRgba) { emit ->
-                renderWebpFramesCallback(probe, transform, emit)
+                renderWebpFramesCallback(probe, transform, speedMultiplier, emit)
             }
             AnimatedSourceKind.GIF -> streamBitmapSourceAsRgba(probe, transform, onFrameRgba) { emit ->
-                renderGifFramesCallback(probe, transform, emit)
+                renderGifFramesCallback(probe, transform, speedMultiplier, emit)
             }
         }
     }
@@ -302,10 +310,15 @@ object AnimatedFrameExtractor {
     private fun renderWebpFramesCallback(
         probe: AnimatedSourceProbe,
         transform: StickerFramingTransform,
+        speedMultiplier: Float,
         onFrame: (index: Int, total: Int, durationMs: Int, bitmap: Bitmap) -> Unit,
     ): List<Int> {
-        val schedule = FrameSamplingPlanner.planFrameSampling(
+        val scaledDurations = FrameSamplingPlanner.scaleFrameDurations(
             sourceDurationsMs = probe.frameDurationsMs,
+            speedMultiplier = speedMultiplier,
+        )
+        val schedule = FrameSamplingPlanner.planFrameSampling(
+            sourceDurationsMs = scaledDurations,
             maxTotalDurationMs = PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS,
             targetMaxFps = MAX_INITIAL_ANIM_FPS,
         )
@@ -330,13 +343,13 @@ object AnimatedFrameExtractor {
             NativeWebpCodec.openDecoder(bytes).use { decoder ->
                 var srcIndex = 0
                 while (true) {
-                    val decodedDuration = decoder.decodeNextFrame(decodedFrame) ?: break
+                    decoder.decodeNextFrame(decodedFrame) ?: break
                     val sampled = wantedByIndex[srcIndex]
                     if (sampled != null) {
                         outputFrame.eraseColor(Color.TRANSPARENT)
                         canvas.drawBitmap(decodedFrame, matrix, paint)
                         val dur = sampled.outputDurationMs.coerceAtLeast(
-                            decodedDuration.coerceAtLeast(PackValidator.MIN_ANIMATED_FRAME_DURATION_MS),
+                            PackValidator.MIN_ANIMATED_FRAME_DURATION_MS,
                         )
                         onFrame(durationsOut.size, schedule.size, dur, outputFrame)
                         durationsOut += dur
@@ -356,10 +369,15 @@ object AnimatedFrameExtractor {
     private fun renderGifFramesCallback(
         probe: AnimatedSourceProbe,
         transform: StickerFramingTransform,
+        speedMultiplier: Float,
         onFrame: (index: Int, total: Int, durationMs: Int, bitmap: Bitmap) -> Unit,
     ): List<Int> {
-        val schedule = FrameSamplingPlanner.planFrameSampling(
+        val scaledDurations = FrameSamplingPlanner.scaleFrameDurations(
             sourceDurationsMs = probe.frameDurationsMs,
+            speedMultiplier = speedMultiplier,
+        )
+        val schedule = FrameSamplingPlanner.planFrameSampling(
+            sourceDurationsMs = scaledDurations,
             maxTotalDurationMs = PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS,
             targetMaxFps = MAX_INITIAL_ANIM_FPS,
         )
@@ -420,12 +438,14 @@ object AnimatedFrameExtractor {
         trimStartMs: Long,
         trimEndMs: Long,
         targetFps: Int,
+        speedMultiplier: Float,
         onFrameRgba: (index: Int, totalEstimated: Int, durationMs: Int, directRgbaBuffer: java.nio.ByteBuffer) -> Unit,
     ): List<Int> {
         val samplePoints = FrameSamplingPlanner.buildVideoSamplePoints(
             startMs = trimStartMs,
             endMs = trimEndMs,
             targetFps = targetFps,
+            speedMultiplier = speedMultiplier,
         )
         require(samplePoints.size >= 2) {
             "El tramo seleccionado del vídeo es demasiado corto (mínimo 2 frames)."
@@ -660,5 +680,119 @@ object AnimatedFrameExtractor {
             }
         }
         return union ?: OpaqueContentBounds(0, 0, width, height, width, height)
+    }
+
+    /**
+     * Reproduce en bucle la vista previa de un GIF o WebP animado aplicando [speedMultiplier]
+     * mediante doble búfer de `Bitmap` reutilizables sin acumular frames en memoria.
+     */
+    @Suppress("DEPRECATION")
+    suspend fun playAnimatedPreviewLoop(
+        probe: AnimatedSourceProbe,
+        speedMultiplier: Float,
+        onFrameReady: (Bitmap) -> Unit,
+    ) {
+        if (probe.kind == AnimatedSourceKind.VIDEO || probe.frameDurationsMs.size < 2) return
+        val scaledDurations = FrameSamplingPlanner.scaleFrameDurations(
+            sourceDurationsMs = probe.frameDurationsMs,
+            speedMultiplier = speedMultiplier,
+        )
+        val schedule = FrameSamplingPlanner.planFrameSampling(
+            sourceDurationsMs = scaledDurations,
+            maxTotalDurationMs = PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS,
+            targetMaxFps = null,
+        )
+        if (schedule.size < 2) return
+
+        val previewScale = min(1f, PackValidator.STICKER_DIMENSION_PX.toFloat() / max(1, max(probe.width, probe.height)).toFloat())
+        val previewW = (probe.width * previewScale).roundToInt().coerceAtLeast(1)
+        val previewH = (probe.height * previewScale).roundToInt().coerceAtLeast(1)
+        val buffers = arrayOf(
+            Bitmap.createBitmap(previewW, previewH, Bitmap.Config.ARGB_8888),
+            Bitmap.createBitmap(previewW, previewH, Bitmap.Config.ARGB_8888),
+        )
+        val canvases = arrayOf(Canvas(buffers[0]), Canvas(buffers[1]))
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val scaleMatrix = android.graphics.Matrix().apply {
+            setScale(previewScale, previewScale)
+        }
+        var activeBufferIdx = 0
+
+        try {
+            if (probe.kind == AnimatedSourceKind.WEBP) {
+                val bytes = withContext(Dispatchers.IO) { probe.sourceFile.readBytes() }
+                val wantedByIndex = schedule.associateBy { it.sourceIndex }
+                val decoded = Bitmap.createBitmap(probe.width, probe.height, Bitmap.Config.ARGB_8888)
+                try {
+                    while (currentCoroutineContext().isActive) {
+                        var emitted = 0
+                        NativeWebpCodec.openDecoder(bytes).use { decoder ->
+                            var srcIndex = 0
+                            while (currentCoroutineContext().isActive && emitted < schedule.size) {
+                                val nextBufferIdx = activeBufferIdx xor 1
+                                val item = wantedByIndex[srcIndex]
+                                val hasMore = withContext(Dispatchers.Default) {
+                                    val dur = decoder.decodeNextFrame(decoded) ?: return@withContext false
+                                    if (item != null) {
+                                        buffers[nextBufferIdx].eraseColor(Color.TRANSPARENT)
+                                        canvases[nextBufferIdx].drawBitmap(decoded, scaleMatrix, paint)
+                                    }
+                                    dur >= 0
+                                }
+                                if (!hasMore) break
+                                if (item != null) {
+                                    activeBufferIdx = nextBufferIdx
+                                    onFrameReady(buffers[activeBufferIdx])
+                                    emitted++
+                                    delay(item.outputDurationMs.toLong())
+                                }
+                                srcIndex++
+                            }
+                        }
+                        if (emitted == 0) break
+                    }
+                } finally {
+                    decoded.recycle()
+                }
+            } else {
+                val movie = withContext(Dispatchers.IO) {
+                    FileInputStream(probe.sourceFile).use { android.graphics.Movie.decodeStream(it) }
+                } ?: return
+                val startTimes = IntArray(probe.frameDurationsMs.size)
+                var accTime = 0
+                for (i in probe.frameDurationsMs.indices) {
+                    startTimes[i] = accTime
+                    accTime += probe.frameDurationsMs[i]
+                }
+                val movieDuration = movie.duration()
+                while (currentCoroutineContext().isActive) {
+                    for (item in schedule) {
+                        currentCoroutineContext().ensureActive()
+                        val rawTimeMs = startTimes.getOrElse(item.sourceIndex) { 0 }
+                        val frameTimeMs = if (movieDuration > 0 && accTime > 0 && movieDuration != accTime) {
+                            ((rawTimeMs.toDouble() / accTime.toDouble()) * movieDuration.toDouble()).roundToInt()
+                        } else {
+                            rawTimeMs
+                        }
+                        val nextBufferIdx = activeBufferIdx xor 1
+                        withContext(Dispatchers.Default) {
+                            val bmp = buffers[nextBufferIdx]
+                            val canvas = canvases[nextBufferIdx]
+                            bmp.eraseColor(Color.TRANSPARENT)
+                            val saveCount = canvas.save()
+                            canvas.scale(previewScale, previewScale)
+                            movie.setTime(frameTimeMs)
+                            movie.draw(canvas, 0f, 0f)
+                            canvas.restoreToCount(saveCount)
+                        }
+                        activeBufferIdx = nextBufferIdx
+                        onFrameReady(buffers[activeBufferIdx])
+                        delay(item.outputDurationMs.toLong())
+                    }
+                }
+            }
+        } finally {
+            buffers.forEach { if (!it.isRecycled) it.recycle() }
+        }
     }
 }

@@ -389,9 +389,15 @@ object AnimatedFrameExtractor {
         )
 
         val durationsOut = ArrayList<Int>(schedule.size)
+        val movieDuration = movie.duration()
         try {
             schedule.forEachIndexed { idx, sampled ->
-                val frameTimeMs = startTimes.getOrElse(sampled.sourceIndex) { 0 }
+                val rawTimeMs = startTimes.getOrElse(sampled.sourceIndex) { 0 }
+                val frameTimeMs = if (movieDuration > 0 && accTime > 0 && movieDuration != accTime) {
+                    ((rawTimeMs.toDouble() / accTime.toDouble()) * movieDuration.toDouble()).roundToInt()
+                } else {
+                    rawTimeMs
+                }
                 srcFrame.eraseColor(Color.TRANSPARENT)
                 movie.setTime(frameTimeMs)
                 movie.draw(srcCanvas, 0f, 0f)

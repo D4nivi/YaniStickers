@@ -12,9 +12,17 @@ class AnimatedStickerEncoderTest {
 
     @Test
     fun adaptiveEstimation_picksAppropriateFpsAndQualitySteps() {
+        assertEquals(20, AnimatedStickerEncoder.chooseInitialVideoFps(400L))
         assertEquals(15, AnimatedStickerEncoder.chooseInitialVideoFps(2_000L))
         assertEquals(12, AnimatedStickerEncoder.chooseInitialVideoFps(5_000L))
         assertEquals(10, AnimatedStickerEncoder.chooseInitialVideoFps(9_000L))
+
+        assertEquals(1, AnimatedStickerEncoder.computeShortLoopMultiplier(600L))
+        assertEquals(1, AnimatedStickerEncoder.computeShortLoopMultiplier(500L))
+        assertEquals(2, AnimatedStickerEncoder.computeShortLoopMultiplier(400L))
+        assertEquals(2, AnimatedStickerEncoder.computeShortLoopMultiplier(250L))
+        assertEquals(3, AnimatedStickerEncoder.computeShortLoopMultiplier(200L))
+        assertEquals(5, AnimatedStickerEncoder.computeShortLoopMultiplier(100L))
 
         assertTrue(AnimatedStickerEncoder.estimateInitialQuality(15) > AnimatedStickerEncoder.estimateInitialQuality(90))
         val reduced = AnimatedStickerEncoder.estimateNextQuality(60f, 900 * 1024L)

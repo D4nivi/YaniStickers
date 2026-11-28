@@ -106,6 +106,11 @@ internal object HardwareVideoFrameExtractor {
             var sampleIndex = 0
             val rgbaBuffer = ByteBuffer.allocateDirect(sizePx * sizePx * 4)
                 .order(ByteOrder.nativeOrder())
+            // Retener temporalmente solo el frame 0 hasta confirmar al menos 2 frames y evitar
+            // contaminar el stream de salida si un vídeo corto cae al respaldo por software
+            var pendingFirstBytes: ByteArray? = null
+            var pendingFirstDuration = 0
+            var emittedCount = 0
 
             while (!outputDone && sampleIndex < samplePoints.size) {
                 if (!inputDone) {
@@ -153,11 +158,31 @@ internal object HardwareVideoFrameExtractor {
                                 break
                             }
                         }
-                        onFrameRgba(
-                            currentSampleIndex,
-                            combinedDuration.coerceAtLeast(PackValidator.MIN_ANIMATED_FRAME_DURATION_MS),
-                            rgbaBuffer,
-                        )
+                        val safeDuration = combinedDuration.coerceAtLeast(PackValidator.MIN_ANIMATED_FRAME_DURATION_MS)
+                        if (emittedCount == 0 && pendingFirstBytes == null) {
+                            val firstCopy = ByteArray(sizePx * sizePx * 4)
+                            rgbaBuffer.rewind()
+                            rgbaBuffer.get(firstCopy)
+                            rgbaBuffer.rewind()
+                            pendingFirstBytes = firstCopy
+                            pendingFirstDuration = safeDuration
+                        } else {
+                            if (pendingFirstBytes != null) {
+                                val firstDirect = ByteBuffer.allocateDirect(sizePx * sizePx * 4)
+                                    .order(ByteOrder.nativeOrder())
+                                firstDirect.put(pendingFirstBytes)
+                                firstDirect.rewind()
+                                onFrameRgba(0, pendingFirstDuration, firstDirect)
+                                pendingFirstBytes = null
+                                emittedCount = 1
+                            }
+                            onFrameRgba(
+                                emittedCount,
+                                safeDuration,
+                                rgbaBuffer,
+                            )
+                            emittedCount++
+                        }
                     }
                     if (isEos) {
                         outputDone = true

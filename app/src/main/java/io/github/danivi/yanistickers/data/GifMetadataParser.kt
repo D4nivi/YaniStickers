@@ -62,7 +62,7 @@ object GifMetadataParser {
                         val blockSize = bytes[pos].toInt() and 0xFF
                         if (blockSize == 4 && pos + 5 < bytes.size) {
                             val delayCs = readUInt16LE(bytes, pos + 2)
-                            pendingDelayMs = if (delayCs == 0) {
+                            pendingDelayMs = if (delayCs <= 1) {
                                 DEFAULT_DELAY_MS
                             } else {
                                 (delayCs * 10).coerceAtLeast(PackValidator.MIN_ANIMATED_FRAME_DURATION_MS)

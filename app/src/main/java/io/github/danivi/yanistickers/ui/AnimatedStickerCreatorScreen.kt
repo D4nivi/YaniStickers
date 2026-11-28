@@ -9,7 +9,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,7 +58,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -75,11 +73,11 @@ import io.github.danivi.yanistickers.R
 import io.github.danivi.yanistickers.data.AnimatedSourceKind
 import io.github.danivi.yanistickers.data.AnimatedSourceProbe
 import io.github.danivi.yanistickers.data.FramingMode
+import io.github.danivi.yanistickers.data.FramingSnapGuides
 import io.github.danivi.yanistickers.data.StaticStickerEncoder
 import io.github.danivi.yanistickers.data.StickerFramingTransform
 import io.github.danivi.yanistickers.validation.PackValidator
 import kotlinx.coroutines.delay
-import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -221,15 +219,21 @@ fun AnimatedStickerCreatorScreen(
                     LiveVideoFramingPreviewBox(
                         probe = probe,
                         transform = state.transform,
+                        snapGuides = state.snapGuides,
+                        isGestureActive = state.isGestureActive,
                         trimStartMs = state.trimStartMs,
                         trimEndMs = state.trimEndMs,
                         onTransformGesture = viewModel::applyGesture,
+                        onTransformGestureEnd = viewModel::onTransformGestureEnd,
                     )
                 } else {
                     LiveAnimatedImageFramingPreviewBox(
                         probe = probe,
                         transform = state.transform,
+                        snapGuides = state.snapGuides,
+                        isGestureActive = state.isGestureActive,
                         onTransformGesture = viewModel::applyGesture,
+                        onTransformGestureEnd = viewModel::onTransformGestureEnd,
                     )
                 }
 
@@ -357,9 +361,12 @@ private fun EmptyAnimatedSelectionCard(
 private fun LiveVideoFramingPreviewBox(
     probe: AnimatedSourceProbe,
     transform: StickerFramingTransform,
+    snapGuides: FramingSnapGuides,
+    isGestureActive: Boolean,
     trimStartMs: Long,
     trimEndMs: Long,
     onTransformGesture: (zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) -> Unit,
+    onTransformGestureEnd: () -> Unit,
 ) {
     var canvasSizePx by remember { mutableFloatStateOf(0f) }
     var videoW by remember(probe.sourceFile.absolutePath) { mutableIntStateOf(probe.width) }
@@ -415,11 +422,11 @@ private fun LiveVideoFramingPreviewBox(
             .onSizeChanged { size ->
                 canvasSizePx = size.width.toFloat()
             }
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    onTransformGesture(zoom, pan.x, pan.y, canvasSizePx)
-                }
-            },
+            .stickerFramingGestures(
+                canvasSizeProvider = { canvasSizePx },
+                onTransformGesture = onTransformGesture,
+                onTransformGestureEnd = onTransformGestureEnd,
+            ),
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawTransparencyCheckerboard(cellSizePx = 16.dp.toPx())
@@ -442,6 +449,7 @@ private fun LiveVideoFramingPreviewBox(
                                 mp.setDataSource(probe.sourceFile.absolutePath)
                                 mp.setSurface(surf)
                                 mp.setVolume(0f, 0f)
+                                mp.isLooping = latestTrimStart == 0L && latestTrimEnd >= probe.totalDurationMs
                                 mp.setOnVideoSizeChangedListener { _, w, h ->
                                     if (w > 0 && h > 0) {
                                         videoW = w
@@ -491,6 +499,10 @@ private fun LiveVideoFramingPreviewBox(
                 )
             },
         )
+        FramingSnapGuidesOverlay(
+            guides = snapGuides,
+            isGestureActive = isGestureActive,
+        )
     }
 }
 
@@ -522,7 +534,10 @@ private fun applyTextureViewTransform(
 private fun LiveAnimatedImageFramingPreviewBox(
     probe: AnimatedSourceProbe,
     transform: StickerFramingTransform,
+    snapGuides: FramingSnapGuides,
+    isGestureActive: Boolean,
     onTransformGesture: (zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) -> Unit,
+    onTransformGestureEnd: () -> Unit,
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { StickerImageLoaderProvider.get(context) }
@@ -560,11 +575,11 @@ private fun LiveAnimatedImageFramingPreviewBox(
             .onSizeChanged { size ->
                 canvasSizePx = size.width.toFloat()
             }
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    onTransformGesture(zoom, pan.x, pan.y, canvasSizePx)
-                }
-            },
+            .stickerFramingGestures(
+                canvasSizeProvider = { canvasSizePx },
+                onTransformGesture = onTransformGesture,
+                onTransformGestureEnd = onTransformGestureEnd,
+            ),
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawTransparencyCheckerboard(cellSizePx = 16.dp.toPx())
@@ -584,6 +599,10 @@ private fun LiveAnimatedImageFramingPreviewBox(
                     translationY = safeTransform.normalizedPanY * canvasSizePx
                 },
         )
+        FramingSnapGuidesOverlay(
+            guides = snapGuides,
+            isGestureActive = isGestureActive,
+        )
     }
 }
 
@@ -595,10 +614,12 @@ private fun VideoTrimCard(
     enabled: Boolean,
     onRangeChanged: (Long, Long) -> Unit,
 ) {
-    val maxDuration = max(500L, totalDurationMs).toFloat()
+    val safeTotalMs = totalDurationMs.coerceAtLeast(1L)
+    val maxDuration = safeTotalMs.toFloat()
     val startVal = trimStartMs.toFloat().coerceIn(0f, maxDuration)
     val endVal = trimEndMs.toFloat().coerceIn(startVal, maxDuration)
     val selectedDurationMs = (trimEndMs - trimStartMs).coerceAtLeast(0L)
+    val canTrim = safeTotalMs > 250L
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -608,20 +629,27 @@ private fun VideoTrimCard(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = "Tramo del vídeo: ${PackValidator.formatSeconds(trimStartMs)} – " +
-                    "${PackValidator.formatSeconds(trimEndMs)} " +
-                    "(${PackValidator.formatSeconds(selectedDurationMs)} / máx. 10 s)",
+                text = if (canTrim) {
+                    "Tramo del vídeo: ${PackValidator.formatSeconds(trimStartMs)} – " +
+                        "${PackValidator.formatSeconds(trimEndMs)} " +
+                        "(${PackValidator.formatSeconds(selectedDurationMs)} / máx. 10 s)"
+                } else {
+                    "Duración del vídeo: ${PackValidator.formatSeconds(safeTotalMs)} " +
+                        "(se repetirá en bucle al guardar)"
+                },
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
             )
-            RangeSlider(
-                value = startVal..endVal,
-                onValueChange = { range ->
-                    onRangeChanged(range.start.roundToLong(), range.endInclusive.roundToLong())
-                },
-                valueRange = 0f..maxDuration,
-                enabled = enabled,
-            )
+            if (canTrim) {
+                RangeSlider(
+                    value = startVal..endVal,
+                    onValueChange = { range ->
+                        onRangeChanged(range.start.roundToLong(), range.endInclusive.roundToLong())
+                    },
+                    valueRange = 0f..maxDuration,
+                    enabled = enabled,
+                )
+            }
         }
     }
 }

@@ -130,7 +130,10 @@ fun StaticStickerCreatorScreen(
                 StickerFramingCanvas(
                     bitmap = state.sourceBitmap!!,
                     transform = state.transform,
+                    snapGuides = state.snapGuides,
+                    isGestureActive = state.isGestureActive,
                     onTransformGesture = viewModel::applyGesture,
+                    onTransformGestureEnd = viewModel::onTransformGestureEnd,
                 )
 
                 StickerFramingControlsRow(

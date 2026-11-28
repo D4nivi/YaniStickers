@@ -13,15 +13,15 @@ class GifMetadataParserTest {
         val gif = buildMinimalGif89a(
             width = 320,
             height = 240,
-            delaysCentiseconds = listOf(5, 0, 12),
+            delaysCentiseconds = listOf(5, 0, 1, 12),
         )
 
         val meta = GifMetadataParser.parseBytes(gif)
         assertNotNull(meta)
         assertEquals(320, meta!!.width)
         assertEquals(240, meta.height)
-        assertEquals(listOf(50, 100, 120), meta.frameDurationsMs)
-        assertEquals(270L, meta.totalDurationMs)
+        assertEquals(listOf(50, 100, 100, 120), meta.frameDurationsMs)
+        assertEquals(370L, meta.totalDurationMs)
     }
 
     @Test

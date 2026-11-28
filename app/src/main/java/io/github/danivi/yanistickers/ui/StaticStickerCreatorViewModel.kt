@@ -8,10 +8,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.danivi.yanistickers.data.FramingMode
+import io.github.danivi.yanistickers.data.FramingSnapGuides
 import io.github.danivi.yanistickers.data.LocalPackStore
 import io.github.danivi.yanistickers.data.OpaqueContentBounds
 import io.github.danivi.yanistickers.data.PackJsonParser
 import io.github.danivi.yanistickers.data.StaticStickerEncoder
+import io.github.danivi.yanistickers.data.StickerFramingSnap
 import io.github.danivi.yanistickers.data.StickerFramingTransform
 import io.github.danivi.yanistickers.data.StickerItem
 import io.github.danivi.yanistickers.validation.ImageContainerFormat
@@ -36,6 +38,8 @@ data class StaticStickerCreatorUiState(
     val hasReplacedSource: Boolean = false,
     val existingAssetValid: Boolean = false,
     val transform: StickerFramingTransform = StickerFramingTransform(),
+    val snapGuides: FramingSnapGuides = FramingSnapGuides(),
+    val isGestureActive: Boolean = false,
     val nameInput: String = "",
     val emojisInput: String = "😀",
     val accessibilityInput: String = "",
@@ -92,6 +96,7 @@ class StaticStickerCreatorViewModel(
     private var currentSessionId: Long = -1L
     private var loadSessionJob: Job? = null
     private var existingContentBounds: OpaqueContentBounds? = null
+    private var rawTransform: StickerFramingTransform = StickerFramingTransform()
 
     /**
      * Reinicia el estado del creador cuando se abre una nueva sesión desde el editor, preservando
@@ -103,6 +108,7 @@ class StaticStickerCreatorViewModel(
         currentSessionId = sessionId
         loadSessionJob?.cancel()
         existingContentBounds = null
+        rawTransform = StickerFramingTransform()
         val isEdit = !forTray && editingStickerIndex != null
         val packName = _uiState.value.packName
         _uiState.value = StaticStickerCreatorUiState(
@@ -159,6 +165,7 @@ class StaticStickerCreatorViewModel(
         }
 
         existingContentBounds = loaded?.contentBounds
+        rawTransform = StickerFramingTransform(mode = FramingMode.FIT)
         _uiState.update { state ->
             if (loaded == null) {
                 state.copy(
@@ -199,12 +206,15 @@ class StaticStickerCreatorViewModel(
             result.onSuccess { bitmap ->
                 existingContentBounds = null
                 val resetTransform = StickerFramingTransform(mode = FramingMode.FIT)
+                rawTransform = resetTransform
                 _uiState.update {
                     it.copy(
                         isDecoding = false,
                         sourceBitmap = bitmap,
                         hasReplacedSource = true,
                         transform = resetTransform,
+                        snapGuides = FramingSnapGuides(),
+                        isGestureActive = false,
                     )
                 }
             }.onFailure { error ->
@@ -219,7 +229,7 @@ class StaticStickerCreatorViewModel(
     }
 
     fun setFramingMode(mode: FramingMode) {
-        updateTransform {
+        updateDirectTransform {
             StaticStickerEncoder.transformForFramingMode(
                 mode = mode,
                 rotationDegrees = rotationDegrees,
@@ -229,7 +239,7 @@ class StaticStickerCreatorViewModel(
     }
 
     fun rotate90() {
-        updateTransform {
+        updateDirectTransform {
             StaticStickerEncoder.rotateTransform90(
                 current = this,
                 contentBounds = existingContentBounds,
@@ -239,7 +249,7 @@ class StaticStickerCreatorViewModel(
 
     fun resetTransform() {
         val currentMode = _uiState.value.transform.mode
-        updateTransform {
+        updateDirectTransform {
             StaticStickerEncoder.transformForFramingMode(
                 mode = currentMode,
                 rotationDegrees = 0,
@@ -249,12 +259,35 @@ class StaticStickerCreatorViewModel(
     }
 
     fun applyGesture(zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) {
+        val bitmap = _uiState.value.sourceBitmap ?: return
         if (canvasSizePx <= 0f) return
-        updateTransform {
-            copy(
-                zoom = zoom * zoomChange,
-                normalizedPanX = normalizedPanX + (panDeltaX / canvasSizePx),
-                normalizedPanY = normalizedPanY + (panDeltaY / canvasSizePx),
+        val nextRaw = rawTransform.copy(
+            zoom = rawTransform.zoom * zoomChange,
+            normalizedPanX = rawTransform.normalizedPanX + (panDeltaX / canvasSizePx),
+            normalizedPanY = rawTransform.normalizedPanY + (panDeltaY / canvasSizePx),
+        ).normalized()
+        rawTransform = nextRaw
+        val snapped = StickerFramingSnap.applySnap(
+            rawTransform = nextRaw,
+            srcWidth = bitmap.width,
+            srcHeight = bitmap.height,
+            contentBounds = existingContentBounds,
+        )
+        _uiState.update {
+            it.copy(
+                transform = snapped.transform,
+                snapGuides = snapped.guides,
+                isGestureActive = true,
+            )
+        }
+    }
+
+    fun onTransformGestureEnd() {
+        rawTransform = _uiState.value.transform
+        _uiState.update {
+            it.copy(
+                snapGuides = FramingSnapGuides(),
+                isGestureActive = false,
             )
         }
     }
@@ -360,10 +393,17 @@ class StaticStickerCreatorViewModel(
         loadSessionJob?.cancel()
     }
 
-    private fun updateTransform(transformBlock: StickerFramingTransform.() -> StickerFramingTransform) {
+    private fun updateDirectTransform(transformBlock: StickerFramingTransform.() -> StickerFramingTransform) {
         if (_uiState.value.sourceBitmap == null) return
         val next = _uiState.value.transform.transformBlock().normalized()
-        _uiState.update { it.copy(transform = next) }
+        rawTransform = next
+        _uiState.update {
+            it.copy(
+                transform = next,
+                snapGuides = FramingSnapGuides(),
+                isGestureActive = false,
+            )
+        }
     }
 
     private data class LoadedEditSession(

@@ -5,7 +5,11 @@ import android.graphics.Paint
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroidSize
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,9 +34,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,28 +47,39 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.danivi.yanistickers.R
 import io.github.danivi.yanistickers.data.FramingMode
+import io.github.danivi.yanistickers.data.FramingSnapGuides
 import io.github.danivi.yanistickers.data.StaticStickerEncoder
 import io.github.danivi.yanistickers.data.StickerFramingTransform
+import kotlin.math.abs
 
 /**
- * Lienzo cuadrado interactivo `1:1` con cuadrícula de transparencia y gestos de zoom/paneo.
+ * Lienzo cuadrado interactivo `1:1` con cuadrícula de transparencia, gestos de zoom/paneo y
+ * líneas guía de ajuste magnético.
  */
 @Composable
 fun StickerFramingCanvas(
     bitmap: Bitmap,
     transform: StickerFramingTransform,
+    snapGuides: FramingSnapGuides = FramingSnapGuides(),
+    isGestureActive: Boolean = false,
     onTransformGesture: (zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) -> Unit,
+    onTransformGestureEnd: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var canvasSizePx by remember { mutableFloatStateOf(0f) }
@@ -77,11 +95,11 @@ fun StickerFramingCanvas(
             .onSizeChanged { size ->
                 canvasSizePx = size.width.toFloat()
             }
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    onTransformGesture(zoom, pan.x, pan.y, canvasSizePx)
-                }
-            },
+            .stickerFramingGestures(
+                canvasSizeProvider = { canvasSizePx },
+                onTransformGesture = onTransformGesture,
+                onTransformGestureEnd = onTransformGestureEnd,
+            ),
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawTransparencyCheckerboard(cellSizePx = 16.dp.toPx())
@@ -94,6 +112,166 @@ fun StickerFramingCanvas(
             drawIntoCanvas { canvas ->
                 canvas.nativeCanvas.drawBitmap(bitmap, matrix, drawPaint)
             }
+        }
+        FramingSnapGuidesOverlay(
+            guides = snapGuides,
+            isGestureActive = isGestureActive,
+        )
+    }
+}
+
+/**
+ * Detector de gestos multitáctil compartido para encuadre que notifica también la liberación final
+ * de los dedos para ocultar las líneas guía de snap.
+ */
+@Composable
+fun Modifier.stickerFramingGestures(
+    canvasSizeProvider: () -> Float,
+    onTransformGesture: (zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) -> Unit,
+    onTransformGestureEnd: () -> Unit,
+): Modifier {
+    val latestSizeProvider by rememberUpdatedState(canvasSizeProvider)
+    val latestOnGesture by rememberUpdatedState(onTransformGesture)
+    val latestOnEnd by rememberUpdatedState(onTransformGestureEnd)
+
+    return pointerInput(Unit) {
+        awaitEachGesture {
+            var zoom = 1f
+            var pan = Offset.Zero
+            var pastTouchSlop = false
+            val touchSlop = viewConfiguration.touchSlop
+
+            awaitFirstDown(requireUnconsumed = false)
+            try {
+                do {
+                    val event = awaitPointerEvent()
+                    val canceled = event.changes.any { it.isConsumed }
+                    if (canceled) break
+
+                    val zoomChange = event.calculateZoom()
+                    val panChange = event.calculatePan()
+
+                    if (!pastTouchSlop) {
+                        zoom *= zoomChange
+                        pan += panChange
+
+                        val centroidSize = event.calculateCentroidSize(useCurrent = false)
+                        val zoomMotion = abs(1f - zoom) * centroidSize
+                        val panMotion = pan.getDistance()
+
+                        if (zoomMotion > touchSlop || panMotion > touchSlop) {
+                            pastTouchSlop = true
+                        }
+                    }
+
+                    if (pastTouchSlop) {
+                        val canvasSize = latestSizeProvider()
+                        if (zoomChange != 1f || panChange != Offset.Zero) {
+                            latestOnGesture(zoomChange, panChange.x, panChange.y, canvasSize)
+                        }
+                        event.changes.forEach { change ->
+                            if (change.positionChanged()) {
+                                change.consume()
+                            }
+                        }
+                    }
+                } while (event.changes.any { it.pressed })
+            } finally {
+                if (pastTouchSlop) {
+                    latestOnEnd()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Superposición de líneas guía temporales y feedback háptico cuando el sticker se imanta al
+ * centro, bordes del lienzo o zoom base.
+ */
+@Composable
+fun FramingSnapGuidesOverlay(
+    guides: FramingSnapGuides,
+    isGestureActive: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val haptics = LocalHapticFeedback.current
+    var previousGuides by remember { mutableStateOf(FramingSnapGuides()) }
+
+    LaunchedEffect(guides, isGestureActive) {
+        if (isGestureActive) {
+            val enteredNewSnap =
+                (guides.centerX && !previousGuides.centerX) ||
+                    (guides.centerY && !previousGuides.centerY) ||
+                    (guides.leftEdge && !previousGuides.leftEdge) ||
+                    (guides.rightEdge && !previousGuides.rightEdge) ||
+                    (guides.topEdge && !previousGuides.topEdge) ||
+                    (guides.bottomEdge && !previousGuides.bottomEdge) ||
+                    (guides.zoomSnap && !previousGuides.zoomSnap)
+            if (enteredNewSnap) {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+            previousGuides = guides
+        } else {
+            previousGuides = FramingSnapGuides()
+        }
+    }
+
+    if (!isGestureActive || !guides.hasAnyActive) return
+
+    val guideColor = MaterialTheme.colorScheme.primary
+    Canvas(modifier = modifier.fillMaxSize()) {
+        val lineStroke = 1.5.dp.toPx()
+        val haloStroke = 3.5.dp.toPx()
+        val haloColor = Color.White.copy(alpha = 0.72f)
+        val centerDash = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 6.dp.toPx()), 0f)
+
+        fun drawGuideLine(start: Offset, end: Offset, dashed: Boolean) {
+            val effect = if (dashed) centerDash else null
+            drawLine(
+                color = haloColor,
+                start = start,
+                end = end,
+                strokeWidth = haloStroke,
+                pathEffect = effect,
+            )
+            drawLine(
+                color = guideColor,
+                start = start,
+                end = end,
+                strokeWidth = lineStroke,
+                pathEffect = effect,
+            )
+        }
+
+        if (guides.centerX) {
+            val x = size.width / 2f
+            drawGuideLine(Offset(x, 0f), Offset(x, size.height), dashed = true)
+        }
+        if (guides.centerY) {
+            val y = size.height / 2f
+            drawGuideLine(Offset(0f, y), Offset(size.width, y), dashed = true)
+        }
+        val edgeInset = lineStroke / 2f
+        if (guides.leftEdge) {
+            drawGuideLine(Offset(edgeInset, 0f), Offset(edgeInset, size.height), dashed = false)
+        }
+        if (guides.rightEdge) {
+            val x = size.width - edgeInset
+            drawGuideLine(Offset(x, 0f), Offset(x, size.height), dashed = false)
+        }
+        if (guides.topEdge) {
+            drawGuideLine(Offset(0f, edgeInset), Offset(size.width, edgeInset), dashed = false)
+        }
+        if (guides.bottomEdge) {
+            val y = size.height - edgeInset
+            drawGuideLine(Offset(0f, y), Offset(size.width, y), dashed = false)
+        }
+        if (guides.zoomSnap) {
+            drawRect(
+                color = guideColor.copy(alpha = 0.55f),
+                style = Stroke(width = 2.dp.toPx()),
+            )
         }
     }
 }

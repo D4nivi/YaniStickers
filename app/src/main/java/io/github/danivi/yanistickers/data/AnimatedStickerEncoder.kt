@@ -85,11 +85,25 @@ object AnimatedStickerEncoder {
 
     private const val WEBP_METHOD = 1
     private const val TARGET_SAFE_BYTES = 465 * 1024L
+    internal const val MIN_RECOMMENDED_ANIMATION_MS = 500L
+    private const val MAX_AUTO_LOOPS = 5
+
+    /**
+     * Calcula cuántas repeticiones debe hacer una animación muy corta (`< 500 ms`) para alcanzar
+     * una duración mínima cómoda (`≥ 500 ms`) sin superar el límite de 10 s.
+     */
+    internal fun computeShortLoopMultiplier(totalDurationMs: Long): Int {
+        if (totalDurationMs <= 0L || totalDurationMs >= MIN_RECOMMENDED_ANIMATION_MS) return 1
+        val needed = kotlin.math.ceil(MIN_RECOMMENDED_ANIMATION_MS.toDouble() / totalDurationMs.toDouble()).toInt()
+        val maxSafeLoops = (PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS / totalDurationMs).toInt().coerceAtLeast(1)
+        return needed.coerceIn(2, minOf(MAX_AUTO_LOOPS, maxSafeLoops))
+    }
 
     /**
      * Calcula la tasa de FPS inicial según la duración del vídeo para equilibrar fluidez y peso.
      */
     internal fun chooseInitialVideoFps(durationMs: Long): Int = when {
+        durationMs <= 1_000L -> 20
         durationMs <= 3_500L -> 15
         durationMs <= 6_500L -> 12
         else -> 10
@@ -127,9 +141,10 @@ object AnimatedStickerEncoder {
     ): EncodedAnimatedWebpResult {
         currentCoroutineContext().ensureActive()
 
-        // Passthrough instantáneo para WebP animado ya válido sin cambios de encuadre
+        // Passthrough instantáneo para WebP animado ya válido (≥ 500 ms) sin cambios de encuadre
         if (allowDirectPassthrough &&
             probe.isDirectValidWebp &&
+            probe.totalDurationMs >= MIN_RECOMMENDED_ANIMATION_MS &&
             transform.normalized() == StickerFramingTransform(mode = FramingMode.FIT)
         ) {
             onProgress(0.85f, "Verificando WebP animado original...")
@@ -173,6 +188,7 @@ object AnimatedStickerEncoder {
             // Pasada 1: decodificar y codificar en paralelo (sin esperar a una segunda lectura si ya cabe)
             var pass1Bytes: ByteArray? = null
             val baseDurations: List<Int>
+            var loopMultiplier = 1
             NativeWebpCodec.openEncoder(
                 width = sizePx,
                 height = sizePx,
@@ -197,6 +213,27 @@ object AnimatedStickerEncoder {
                         )
                         val frac = ((idx + 1).toFloat() / totalEst.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
                         emitProgress(0.05f + frac * 0.60f, "Codificando frames (${idx + 1}/$totalEst)...")
+                    }
+                }
+                val singleLoopDurationMs = baseDurations.fold(0L) { acc, d -> acc + d.toLong() }
+                loopMultiplier = computeShortLoopMultiplier(singleLoopDurationMs)
+                if (loopMultiplier > 1) {
+                    emitProgress(0.66f, "Repitiendo clip corto (${loopMultiplier}x)...")
+                    val loopBuffer = ByteBuffer.allocateDirect(sizePx * sizePx * 4)
+                    RawRgbaSequenceReader(rawFramesFile, sizePx).use { reader ->
+                        repeat(loopMultiplier - 1) {
+                            for (i in baseDurations.indices) {
+                                currentCoroutineContext().ensureActive()
+                                reader.readFrameInto(i, loopBuffer)
+                                encoder.addRgbaBufferFrame(
+                                    directRgbaBuffer = loopBuffer,
+                                    durationMs = baseDurations[i],
+                                    quality = initialQuality,
+                                    lossless = false,
+                                    method = WEBP_METHOD,
+                                )
+                            }
+                        }
                     }
                 }
                 emitProgress(0.68f, "Ensamblando WebP animado...")
@@ -229,6 +266,7 @@ object AnimatedStickerEncoder {
                 initialQuality = initialQuality,
                 initialSizeBytes = firstResultBytes.size.toLong(),
                 startFps = initialFps,
+                loopMultiplier = loopMultiplier,
                 emitProgress = ::emitProgress,
             ).also {
                 onProgress(1f, "Listo")
@@ -244,12 +282,14 @@ object AnimatedStickerEncoder {
         initialQuality: Float,
         initialSizeBytes: Long,
         startFps: Int,
+        loopMultiplier: Int,
         emitProgress: (Float, String) -> Unit,
     ): EncodedAnimatedWebpResult {
         val sizePx = PackValidator.STICKER_DIMENSION_PX
         val directBuffer = ByteBuffer.allocateDirect(sizePx * sizePx * 4)
+        val maxSingleLoopMs = PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS / loopMultiplier.coerceAtLeast(1)
         val baseTotalMs = baseDurations.fold(0L) { acc, d -> acc + d.toLong() }
-            .coerceAtMost(PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS)
+            .coerceAtMost(maxSingleLoopMs)
 
         val fpsCandidates = buildList {
             add(null)
@@ -288,7 +328,7 @@ object AnimatedStickerEncoder {
                             currentProgress,
                             "Ajustando tamaño (calidad ${quality.toInt()})...",
                         )
-                        val bytes = encodeSchedule(schedule, quality, reader, directBuffer)
+                        val bytes = encodeSchedule(schedule, quality, loopMultiplier, reader, directBuffer)
                         currentProgress = (currentProgress + 0.04f).coerceAtMost(0.95f)
 
                         if (bytes.size.toLong() <= PackValidator.MAX_ANIMATED_STICKER_BYTES) {
@@ -319,6 +359,7 @@ object AnimatedStickerEncoder {
     private fun encodeSchedule(
         schedule: List<SampledSourceFrame>,
         quality: Float,
+        loopMultiplier: Int,
         reader: RawRgbaSequenceReader,
         directBuffer: ByteBuffer,
     ): ByteArray {
@@ -329,15 +370,17 @@ object AnimatedStickerEncoder {
             loopCount = 0,
             minimizeSize = false,
         ).use { encoder ->
-            for (item in schedule) {
-                reader.readFrameInto(item.sourceIndex, directBuffer)
-                encoder.addRgbaBufferFrame(
-                    directRgbaBuffer = directBuffer,
-                    durationMs = item.outputDurationMs,
-                    quality = quality,
-                    lossless = false,
-                    method = WEBP_METHOD,
-                )
+            repeat(loopMultiplier.coerceAtLeast(1)) {
+                for (item in schedule) {
+                    reader.readFrameInto(item.sourceIndex, directBuffer)
+                    encoder.addRgbaBufferFrame(
+                        directRgbaBuffer = directBuffer,
+                        durationMs = item.outputDurationMs,
+                        quality = quality,
+                        lossless = false,
+                        method = WEBP_METHOD,
+                    )
+                }
             }
             return encoder.finish()
         }
@@ -347,7 +390,7 @@ object AnimatedStickerEncoder {
         (ImageContainerInspector.inspectBytes(bytes)
             ?: error("No se pudo verificar el archivo WebP animado generado.")).also { info ->
             check(info.format == ImageContainerFormat.WEBP && info.isAnimated && info.frameCount > 1) {
-                "El resultado generado no es un WebP animado válido."
+                "El archivo seleccionado no tiene variación entre frames (solo 1 frame único). Elige un vídeo o GIF con movimiento."
             }
             check(info.width == PackValidator.STICKER_DIMENSION_PX && info.height == PackValidator.STICKER_DIMENSION_PX) {
                 "Dimensiones inesperadas del WebP animado (${info.width}×${info.height})."

@@ -11,9 +11,11 @@ import io.github.danivi.yanistickers.data.AnimatedSourceKind
 import io.github.danivi.yanistickers.data.AnimatedSourceProbe
 import io.github.danivi.yanistickers.data.AnimatedStickerEncoder
 import io.github.danivi.yanistickers.data.FramingMode
+import io.github.danivi.yanistickers.data.FramingSnapGuides
 import io.github.danivi.yanistickers.data.LocalPackStore
 import io.github.danivi.yanistickers.data.PackJsonParser
 import io.github.danivi.yanistickers.data.StaticStickerEncoder
+import io.github.danivi.yanistickers.data.StickerFramingSnap
 import io.github.danivi.yanistickers.data.StickerFramingTransform
 import io.github.danivi.yanistickers.data.StickerItem
 import io.github.danivi.yanistickers.validation.PackValidator
@@ -40,6 +42,8 @@ data class AnimatedStickerCreatorUiState(
     val probe: AnimatedSourceProbe? = null,
     val hasReplacedSource: Boolean = false,
     val transform: StickerFramingTransform = StickerFramingTransform(),
+    val snapGuides: FramingSnapGuides = FramingSnapGuides(),
+    val isGestureActive: Boolean = false,
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = 0L,
     val nameInput: String = "",
@@ -83,6 +87,7 @@ class AnimatedStickerCreatorViewModel(
     private var loadSessionJob: Job? = null
     private var saveJob: Job? = null
     private var currentSessionId: Long = -1L
+    private var rawTransform: StickerFramingTransform = StickerFramingTransform()
 
     fun ensureSession(sessionId: Long) {
         if (currentSessionId == sessionId) return
@@ -90,6 +95,7 @@ class AnimatedStickerCreatorViewModel(
         loadSessionJob?.cancel()
         saveJob?.cancel()
         releaseProbeAndTempFiles(createFreshDir = true)
+        rawTransform = StickerFramingTransform()
         val isEdit = editingStickerIndex != null
         val packName = _uiState.value.packName
         _uiState.value = AnimatedStickerCreatorUiState(
@@ -152,12 +158,15 @@ class AnimatedStickerCreatorViewModel(
                 } else {
                     state.trimEndMs
                 }
+                rawTransform = StickerFramingTransform(mode = FramingMode.FIT)
                 state.copy(
                     packName = loaded.packName,
                     isProbing = false,
                     probe = newProbe ?: state.probe,
                     hasReplacedSource = false,
-                    transform = StickerFramingTransform(mode = FramingMode.FIT),
+                    transform = rawTransform,
+                    snapGuides = FramingSnapGuides(),
+                    isGestureActive = false,
                     trimStartMs = 0L,
                     trimEndMs = initialEnd,
                     nameInput = item?.name ?: state.nameInput,
@@ -195,12 +204,15 @@ class AnimatedStickerCreatorViewModel(
                     if (!old.isRecycled) old.recycle()
                 }
                 val initialEnd = min(newProbe.totalDurationMs, PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS)
+                rawTransform = StickerFramingTransform(mode = FramingMode.FIT)
                 _uiState.update {
                     it.copy(
                         isProbing = false,
                         probe = newProbe,
                         hasReplacedSource = true,
-                        transform = StickerFramingTransform(mode = FramingMode.FIT),
+                        transform = rawTransform,
+                        snapGuides = FramingSnapGuides(),
+                        isGestureActive = false,
                         trimStartMs = 0L,
                         trimEndMs = initialEnd,
                     )
@@ -218,7 +230,7 @@ class AnimatedStickerCreatorViewModel(
 
     fun setFramingMode(mode: FramingMode) {
         val bounds = _uiState.value.probe?.contentBounds
-        updateTransform {
+        updateDirectTransform {
             StaticStickerEncoder.transformForFramingMode(
                 mode = mode,
                 rotationDegrees = rotationDegrees,
@@ -229,7 +241,7 @@ class AnimatedStickerCreatorViewModel(
 
     fun rotate90() {
         val bounds = _uiState.value.probe?.contentBounds
-        updateTransform {
+        updateDirectTransform {
             StaticStickerEncoder.rotateTransform90(
                 current = this,
                 contentBounds = bounds,
@@ -240,7 +252,7 @@ class AnimatedStickerCreatorViewModel(
     fun resetTransform() {
         val currentMode = _uiState.value.transform.mode
         val bounds = _uiState.value.probe?.contentBounds
-        updateTransform {
+        updateDirectTransform {
             StaticStickerEncoder.transformForFramingMode(
                 mode = currentMode,
                 rotationDegrees = 0,
@@ -250,21 +262,45 @@ class AnimatedStickerCreatorViewModel(
     }
 
     fun applyGesture(zoomChange: Float, panDeltaX: Float, panDeltaY: Float, canvasSizePx: Float) {
+        val probe = _uiState.value.probe ?: return
         if (canvasSizePx <= 0f) return
-        updateTransform {
-            copy(
-                zoom = zoom * zoomChange,
-                normalizedPanX = normalizedPanX + (panDeltaX / canvasSizePx),
-                normalizedPanY = normalizedPanY + (panDeltaY / canvasSizePx),
+        val nextRaw = rawTransform.copy(
+            zoom = rawTransform.zoom * zoomChange,
+            normalizedPanX = rawTransform.normalizedPanX + (panDeltaX / canvasSizePx),
+            normalizedPanY = rawTransform.normalizedPanY + (panDeltaY / canvasSizePx),
+        ).normalized()
+        rawTransform = nextRaw
+        val snapped = StickerFramingSnap.applySnap(
+            rawTransform = nextRaw,
+            srcWidth = probe.width,
+            srcHeight = probe.height,
+            contentBounds = probe.contentBounds,
+        )
+        _uiState.update {
+            it.copy(
+                transform = snapped.transform,
+                snapGuides = snapped.guides,
+                isGestureActive = true,
+            )
+        }
+    }
+
+    fun onTransformGestureEnd() {
+        rawTransform = _uiState.value.transform
+        _uiState.update {
+            it.copy(
+                snapGuides = FramingSnapGuides(),
+                isGestureActive = false,
             )
         }
     }
 
     fun onTrimRangeChanged(startMs: Long, endMs: Long) {
         val probe = _uiState.value.probe ?: return
-        val maxTotal = probe.totalDurationMs
-        val clampedStart = startMs.coerceIn(0L, max(0L, maxTotal - MIN_TRIM_SPAN_MS))
-        var clampedEnd = endMs.coerceIn(clampedStart + MIN_TRIM_SPAN_MS, maxTotal)
+        val maxTotal = probe.totalDurationMs.coerceAtLeast(1L)
+        val effectiveMinSpan = min(MIN_TRIM_SPAN_MS, maxTotal)
+        val clampedStart = startMs.coerceIn(0L, max(0L, maxTotal - effectiveMinSpan))
+        var clampedEnd = endMs.coerceIn(clampedStart + effectiveMinSpan, maxTotal)
         if (clampedEnd - clampedStart > PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS) {
             clampedEnd = clampedStart + PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS
         }
@@ -424,12 +460,15 @@ class AnimatedStickerCreatorViewModel(
         _uiState.update { it.copy(message = null) }
     }
 
-    private fun updateTransform(transformBlock: StickerFramingTransform.() -> StickerFramingTransform) {
+    private fun updateDirectTransform(transformBlock: StickerFramingTransform.() -> StickerFramingTransform) {
         if (_uiState.value.probe == null) return
         val next = _uiState.value.transform.transformBlock().normalized()
+        rawTransform = next
         _uiState.update {
             it.copy(
                 transform = next,
+                snapGuides = FramingSnapGuides(),
+                isGestureActive = false,
             )
         }
     }

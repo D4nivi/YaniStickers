@@ -168,7 +168,7 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
             }
             result.onSuccess { duplicated ->
                 val msg = if (duplicated != null) {
-                    "Pack duplicado como «${duplicated.name}»."
+                    "Pack duplicado como \"${duplicated.name}\"."
                 } else {
                     "No se encontró el pack a duplicar."
                 }

@@ -36,3 +36,23 @@ val OnVibrantRedContainer = Color(0xFFB7101F)
 
 // Verde característico de WhatsApp para el botón de añadir pack
 val WhatsAppGreen = Color(0xFF20B858)
+
+// Verde azulado para importar copias (.zip) distinto al azul principal de exportar
+val ImportTeal = Color(0xFF0E7C7B)
+
+// Fondo suave azul cielo para acciones secundarias de icono («Cambiar icono», «Usar como icono»)
+val IconActionContainer = Color(0xFFBFD9FC)
+val OnIconActionContainer = Color(0xFF0E3466)
+
+// Colores para los badges de estado y tipo de pack en la lista principal
+val StaticBadgeContainer = Color(0xFFE0DCF8)
+val OnStaticBadgeContainer = Color(0xFF33286B)
+val StaticBadgeBorder = Color(0xFFBDB4EA)
+
+val AnimatedBadgeContainer = Color(0xFFFFE2C4)
+val OnAnimatedBadgeContainer = Color(0xFF7A3800)
+val AnimatedBadgeBorder = Color(0xFFF2BC8B)
+
+val AddedBadgeContainer = Color(0xFFCFF3DC)
+val OnAddedBadgeContainer = Color(0xFF0E5A2B)
+val AddedBadgeBorder = Color(0xFF9ADCB2)

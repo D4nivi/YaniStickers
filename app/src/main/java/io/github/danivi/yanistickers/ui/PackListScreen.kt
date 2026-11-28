@@ -36,15 +36,17 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -75,6 +77,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.danivi.yanistickers.R
+import io.github.danivi.yanistickers.ui.theme.AddedBadgeBorder
+import io.github.danivi.yanistickers.ui.theme.AddedBadgeContainer
+import io.github.danivi.yanistickers.ui.theme.AnimatedBadgeBorder
+import io.github.danivi.yanistickers.ui.theme.AnimatedBadgeContainer
+import io.github.danivi.yanistickers.ui.theme.IconActionContainer
+import io.github.danivi.yanistickers.ui.theme.OnAddedBadgeContainer
+import io.github.danivi.yanistickers.ui.theme.OnAnimatedBadgeContainer
+import io.github.danivi.yanistickers.ui.theme.OnIconActionContainer
+import io.github.danivi.yanistickers.ui.theme.OnStaticBadgeContainer
+import io.github.danivi.yanistickers.ui.theme.StaticBadgeBorder
+import io.github.danivi.yanistickers.ui.theme.StaticBadgeContainer
 import io.github.danivi.yanistickers.validation.PackValidator
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -435,21 +448,21 @@ private fun PackSummaryCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                AssistChip(
-                    onClick = {},
-                    label = {
-                        Text(
-                            stringResource(
-                                if (pack.animated) R.string.badge_animated else R.string.badge_static,
-                            ),
-                        )
-                    },
+                PackStatusBadge(
+                    text = stringResource(
+                        if (pack.animated) R.string.badge_animated else R.string.badge_static,
+                    ),
+                    containerColor = if (pack.animated) AnimatedBadgeContainer else StaticBadgeContainer,
+                    contentColor = if (pack.animated) OnAnimatedBadgeContainer else OnStaticBadgeContainer,
+                    borderColor = if (pack.animated) AnimatedBadgeBorder else StaticBadgeBorder,
                 )
 
                 if (item.whitelistStatus.isAddedAnywhere) {
-                    AssistChip(
-                        onClick = {},
-                        label = { Text(stringResource(R.string.status_added)) },
+                    PackStatusBadge(
+                        text = stringResource(R.string.status_added),
+                        containerColor = AddedBadgeContainer,
+                        contentColor = OnAddedBadgeContainer,
+                        borderColor = AddedBadgeBorder,
                     )
                 }
             }
@@ -474,6 +487,28 @@ private fun PackSummaryCard(
                 onClick = onAddToWhatsApp,
             )
         }
+    }
+}
+
+@Composable
+private fun PackStatusBadge(
+    text: String,
+    containerColor: Color,
+    contentColor: Color,
+    borderColor: Color,
+) {
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        )
     }
 }
 
@@ -604,15 +639,21 @@ private fun CreatePackDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
+                    PackTypeChoiceChip(
                         selected = !animated,
+                        label = stringResource(R.string.badge_static),
+                        containerColor = StaticBadgeContainer,
+                        contentColor = OnStaticBadgeContainer,
+                        borderColor = StaticBadgeBorder,
                         onClick = { animated = false },
-                        label = { Text(stringResource(R.string.badge_static)) },
                     )
-                    FilterChip(
+                    PackTypeChoiceChip(
                         selected = animated,
+                        label = stringResource(R.string.badge_animated),
+                        containerColor = AnimatedBadgeContainer,
+                        contentColor = OnAnimatedBadgeContainer,
+                        borderColor = AnimatedBadgeBorder,
                         onClick = { animated = true },
-                        label = { Text(stringResource(R.string.badge_animated)) },
                     )
                 }
             }
@@ -626,9 +667,57 @@ private fun CreatePackDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            FilledTonalButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = IconActionContainer,
+                    contentColor = OnIconActionContainer,
+                ),
+            ) {
                 Text(stringResource(R.string.cancel))
             }
         },
+    )
+}
+
+@Composable
+private fun PackTypeChoiceChip(
+    selected: Boolean,
+    label: String,
+    containerColor: Color,
+    contentColor: Color,
+    borderColor: Color,
+    onClick: () -> Unit,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        leadingIcon = if (selected) {
+            {
+                Icon(
+                    imageVector = Icons.Outlined.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        } else {
+            null
+        },
+        label = { Text(label) },
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = containerColor.copy(alpha = 0.45f),
+            labelColor = contentColor.copy(alpha = 0.78f),
+            selectedContainerColor = containerColor,
+            selectedLabelColor = contentColor,
+            selectedLeadingIconColor = contentColor,
+        ),
+        border = FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = selected,
+            borderColor = borderColor.copy(alpha = 0.55f),
+            selectedBorderColor = borderColor,
+            borderWidth = 1.dp,
+            selectedBorderWidth = 1.5.dp,
+        ),
     )
 }

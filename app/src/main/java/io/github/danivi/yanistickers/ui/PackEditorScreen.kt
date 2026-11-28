@@ -42,6 +42,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +69,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.danivi.yanistickers.R
 import io.github.danivi.yanistickers.data.StickerPack
+import io.github.danivi.yanistickers.ui.theme.IconActionContainer
+import io.github.danivi.yanistickers.ui.theme.OnIconActionContainer
 import io.github.danivi.yanistickers.validation.PackValidator
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -614,7 +617,14 @@ private fun MetadataEditorCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = onChangeTrayIcon) {
+                FilledTonalButton(
+                    onClick = onChangeTrayIcon,
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = IconActionContainer,
+                        contentColor = OnIconActionContainer,
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                ) {
                     Text(stringResource(R.string.action_change_tray))
                 }
             }
@@ -724,7 +734,14 @@ private fun StickerEditorRowCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onSetAsTray) {
+                FilledTonalButton(
+                    onClick = onSetAsTray,
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = IconActionContainer,
+                        contentColor = OnIconActionContainer,
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
                     Text(stringResource(R.string.action_use_as_tray_short))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {

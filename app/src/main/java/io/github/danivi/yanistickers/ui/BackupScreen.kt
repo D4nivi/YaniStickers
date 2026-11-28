@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -59,6 +60,8 @@ import io.github.danivi.yanistickers.R
 import io.github.danivi.yanistickers.data.ConflictResolution
 import io.github.danivi.yanistickers.data.StagedBackup
 import io.github.danivi.yanistickers.data.StagedPackEntry
+import io.github.danivi.yanistickers.ui.theme.ImportTeal
+import io.github.danivi.yanistickers.ui.theme.PureWhite
 
 private val ZIP_MIME_TYPES = arrayOf(
     "application/zip",
@@ -242,12 +245,13 @@ private fun SinglePackExportRowCard(
             OutlinedButton(
                 onClick = onExport,
                 enabled = !isBusy,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Save,
                     contentDescription = null,
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text(stringResource(R.string.action_export_short))
             }
         }
@@ -314,7 +318,7 @@ private fun ImportSectionCard(
                 Icon(
                     imageVector = Icons.Outlined.FileOpen,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = ImportTeal,
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
@@ -328,9 +332,13 @@ private fun ImportSectionCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            OutlinedButton(
+            Button(
                 onClick = onImportClick,
                 enabled = !isBusy,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ImportTeal,
+                    contentColor = PureWhite,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.action_import_zip))
@@ -456,7 +464,7 @@ private fun ConflictItemBlock(
                 text = buildString {
                     append("En copia: ${entry.pack.stickers.size} stickers")
                     if (existing != null) {
-                        append(" • Local actual: «${existing.name}» (${existing.stickers.size} stickers)")
+                        append(" • Local actual: \"${existing.name}\" (${existing.stickers.size} stickers)")
                     }
                 },
                 style = MaterialTheme.typography.bodySmall,

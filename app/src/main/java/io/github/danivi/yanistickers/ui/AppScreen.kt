@@ -9,10 +9,12 @@ sealed interface AppScreen {
     data class StaticStickerCreator(
         val packId: String,
         val forTray: Boolean = false,
+        val editingStickerIndex: Int? = null,
         val sessionId: Long = System.nanoTime(),
     ) : AppScreen
     data class AnimatedStickerCreator(
         val packId: String,
+        val editingStickerIndex: Int? = null,
         val sessionId: Long = System.nanoTime(),
     ) : AppScreen
     data object Backup : AppScreen

@@ -180,27 +180,6 @@ class PackEditorViewModel(
         }
     }
 
-    fun updateSticker(index: Int, name: String, emojisRaw: String, accessibilityText: String) {
-        val emojis = PackJsonParser.splitEmojisGraphemes(emojisRaw)
-        viewModelScope.launch {
-            val updated = withContext(Dispatchers.IO) {
-                store.updateSticker(
-                    identifier = packId,
-                    stickerIndex = index,
-                    emojis = emojis,
-                    accessibilityText = accessibilityText,
-                    name = name,
-                )
-            }
-            if (updated != null) {
-                _uiState.update {
-                    it.copy(message = "Sticker actualizado (v${updated.imageDataVersion}).")
-                }
-                refresh()
-            }
-        }
-    }
-
     fun moveStickerUp(index: Int) {
         if (index <= 0) return
         reorderSticker(index, index - 1)

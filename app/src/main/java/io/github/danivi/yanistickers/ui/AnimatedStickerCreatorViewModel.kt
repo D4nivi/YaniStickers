@@ -13,7 +13,9 @@ import io.github.danivi.yanistickers.data.AnimatedStickerEncoder
 import io.github.danivi.yanistickers.data.FramingMode
 import io.github.danivi.yanistickers.data.LocalPackStore
 import io.github.danivi.yanistickers.data.PackJsonParser
+import io.github.danivi.yanistickers.data.StaticStickerEncoder
 import io.github.danivi.yanistickers.data.StickerFramingTransform
+import io.github.danivi.yanistickers.data.StickerItem
 import io.github.danivi.yanistickers.validation.PackValidator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -29,12 +31,14 @@ import kotlin.math.max
 import kotlin.math.min
 
 data class AnimatedStickerCreatorUiState(
+    val isEditMode: Boolean = false,
     val packName: String = "",
     val isProbing: Boolean = false,
     val isSaving: Boolean = false,
     val saveProgress: Float = 0f,
     val saveStatus: String = "",
     val probe: AnimatedSourceProbe? = null,
+    val hasReplacedSource: Boolean = false,
     val transform: StickerFramingTransform = StickerFramingTransform(),
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = 0L,
@@ -66,33 +70,107 @@ data class AnimatedStickerCreatorUiState(
 class AnimatedStickerCreatorViewModel(
     application: Application,
     private val packId: String,
+    private val editingStickerIndex: Int? = null,
 ) : AndroidViewModel(application) {
 
     private val store = LocalPackStore(application)
-    private val _uiState = MutableStateFlow(AnimatedStickerCreatorUiState())
+    private val _uiState = MutableStateFlow(
+        AnimatedStickerCreatorUiState(isEditMode = editingStickerIndex != null),
+    )
     val uiState: StateFlow<AnimatedStickerCreatorUiState> = _uiState.asStateFlow()
 
     private var sessionDir: File = AnimatedFrameExtractor.createSessionTempDir(application)
+    private var loadSessionJob: Job? = null
     private var saveJob: Job? = null
     private var currentSessionId: Long = -1L
-
-    init {
-        viewModelScope.launch {
-            val pack = withContext(Dispatchers.IO) { store.getPack(packId) }
-            _uiState.update { it.copy(packName = pack?.name.orEmpty()) }
-        }
-    }
 
     fun ensureSession(sessionId: Long) {
         if (currentSessionId == sessionId) return
         currentSessionId = sessionId
+        loadSessionJob?.cancel()
         saveJob?.cancel()
         releaseProbeAndTempFiles(createFreshDir = true)
+        val isEdit = editingStickerIndex != null
         val packName = _uiState.value.packName
-        _uiState.value = AnimatedStickerCreatorUiState(packName = packName)
+        _uiState.value = AnimatedStickerCreatorUiState(
+            isEditMode = isEdit,
+            packName = packName,
+            isProbing = isEdit,
+        )
+        loadSessionJob = viewModelScope.launch {
+            loadInitialSession(isEdit)
+        }
+    }
+
+    private suspend fun loadInitialSession(isEdit: Boolean) {
+        val loaded = withContext(Dispatchers.IO) {
+            val pack = store.getPack(packId) ?: return@withContext null
+            if (!isEdit) return@withContext LoadedAnimatedEditSession(packName = pack.name)
+
+            val index = editingStickerIndex ?: return@withContext LoadedAnimatedEditSession(packName = pack.name)
+            val item = pack.stickers.getOrNull(index)
+                ?: return@withContext LoadedAnimatedEditSession(
+                    packName = pack.name,
+                    errorMessage = "No se encontró el sticker a editar.",
+                )
+            val assetName = PackJsonParser.extractStickerAssetName(item.file)
+            val file = assetName?.let { store.resolveAssetFile(packId, it) }
+            if (file == null) {
+                return@withContext LoadedAnimatedEditSession(
+                    packName = pack.name,
+                    item = item,
+                    errorMessage = "No se encontró el archivo del sticker a editar.",
+                )
+            }
+
+            val probed = runCatching {
+                AnimatedFrameExtractor.probeExistingWebpSticker(
+                    sourceFile = file,
+                    sessionDir = sessionDir,
+                )
+            }
+            LoadedAnimatedEditSession(
+                packName = pack.name,
+                item = item,
+                probe = probed.getOrNull(),
+                errorMessage = probed.exceptionOrNull()?.message
+                    ?: if (probed.isFailure) "No se pudo abrir el sticker animado a editar." else null,
+            )
+        }
+
+        _uiState.update { state ->
+            if (loaded == null) {
+                state.copy(
+                    isProbing = false,
+                    message = if (isEdit) "No se encontró el pack." else state.message,
+                )
+            } else {
+                val item = loaded.item
+                val newProbe = loaded.probe
+                val initialEnd = if (newProbe != null) {
+                    min(newProbe.totalDurationMs, PackValidator.MAX_ANIMATED_TOTAL_DURATION_MS)
+                } else {
+                    state.trimEndMs
+                }
+                state.copy(
+                    packName = loaded.packName,
+                    isProbing = false,
+                    probe = newProbe ?: state.probe,
+                    hasReplacedSource = false,
+                    transform = StickerFramingTransform(mode = FramingMode.FIT),
+                    trimStartMs = 0L,
+                    trimEndMs = initialEnd,
+                    nameInput = item?.name ?: state.nameInput,
+                    emojisInput = item?.emojis?.joinToString(" ") ?: state.emojisInput,
+                    accessibilityInput = item?.accessibilityText ?: state.accessibilityInput,
+                    message = loaded.errorMessage ?: state.message,
+                )
+            }
+        }
     }
 
     fun onMediaSelected(uri: Uri) {
+        loadSessionJob?.cancel()
         saveJob?.cancel()
         viewModelScope.launch {
             _uiState.update {
@@ -121,6 +199,7 @@ class AnimatedStickerCreatorViewModel(
                     it.copy(
                         isProbing = false,
                         probe = newProbe,
+                        hasReplacedSource = true,
                         transform = StickerFramingTransform(mode = FramingMode.FIT),
                         trimStartMs = 0L,
                         trimEndMs = initialEnd,
@@ -138,30 +217,35 @@ class AnimatedStickerCreatorViewModel(
     }
 
     fun setFramingMode(mode: FramingMode) {
+        val bounds = _uiState.value.probe?.contentBounds
         updateTransform {
-            copy(
+            StaticStickerEncoder.transformForFramingMode(
                 mode = mode,
-                zoom = 1f,
-                normalizedPanX = 0f,
-                normalizedPanY = 0f,
+                rotationDegrees = rotationDegrees,
+                contentBounds = bounds,
             )
         }
     }
 
     fun rotate90() {
+        val bounds = _uiState.value.probe?.contentBounds
         updateTransform {
-            copy(
-                rotationDegrees = (rotationDegrees + 90) % 360,
-                normalizedPanX = 0f,
-                normalizedPanY = 0f,
+            StaticStickerEncoder.rotateTransform90(
+                current = this,
+                contentBounds = bounds,
             )
         }
     }
 
     fun resetTransform() {
         val currentMode = _uiState.value.transform.mode
+        val bounds = _uiState.value.probe?.contentBounds
         updateTransform {
-            StickerFramingTransform(mode = currentMode)
+            StaticStickerEncoder.transformForFramingMode(
+                mode = currentMode,
+                rotationDegrees = 0,
+                contentBounds = bounds,
+            )
         }
     }
 
@@ -216,8 +300,33 @@ class AnimatedStickerCreatorViewModel(
         if (!current.canSave) return
 
         val emojis = PackJsonParser.splitEmojisGraphemes(current.emojisInput)
+        val editIndex = editingStickerIndex?.takeIf { current.isEditMode }
+        val framingChanged = current.transform.normalized() != StickerFramingTransform(mode = FramingMode.FIT)
+        val canSkipReencode = editIndex != null && !current.hasReplacedSource && !framingChanged && probe.isDirectValidWebp
+
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
+            if (canSkipReencode) {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        store.updateSticker(
+                            identifier = packId,
+                            stickerIndex = editIndex!!,
+                            emojis = emojis,
+                            accessibilityText = current.accessibilityInput,
+                            name = current.nameInput,
+                        ) ?: error("No se encontró el sticker en el pack.")
+                    }
+                }.onSuccess {
+                    _uiState.update { it.copy(saved = true) }
+                }.onFailure { error ->
+                    _uiState.update {
+                        it.copy(message = error.message ?: "No se pudo guardar el sticker animado.")
+                    }
+                }
+                return@launch
+            }
+
             _uiState.update {
                 it.copy(
                     isSaving = true,
@@ -252,13 +361,24 @@ class AnimatedStickerCreatorViewModel(
                 }
 
                 withContext(Dispatchers.IO) {
-                    store.addSticker(
-                        identifier = packId,
-                        webpBytes = encoded.bytes,
-                        emojis = emojis,
-                        accessibilityText = current.accessibilityInput,
-                        name = current.nameInput,
-                    ) ?: error("No se encontró el pack.")
+                    if (editIndex != null) {
+                        store.replaceSticker(
+                            identifier = packId,
+                            stickerIndex = editIndex,
+                            webpBytes = encoded.bytes,
+                            emojis = emojis,
+                            accessibilityText = current.accessibilityInput,
+                            name = current.nameInput,
+                        ) ?: error("No se encontró el sticker en el pack.")
+                    } else {
+                        store.addSticker(
+                            identifier = packId,
+                            webpBytes = encoded.bytes,
+                            emojis = emojis,
+                            accessibilityText = current.accessibilityInput,
+                            name = current.nameInput,
+                        ) ?: error("No se encontró el pack.")
+                    }
                 }
 
                 _uiState.update {
@@ -326,9 +446,17 @@ class AnimatedStickerCreatorViewModel(
     }
 
     override fun onCleared() {
+        loadSessionJob?.cancel()
         saveJob?.cancel()
         releaseProbeAndTempFiles(createFreshDir = false)
     }
+
+    private data class LoadedAnimatedEditSession(
+        val packName: String,
+        val item: StickerItem? = null,
+        val probe: AnimatedSourceProbe? = null,
+        val errorMessage: String? = null,
+    )
 
     companion object {
         private const val MIN_TRIM_SPAN_MS = 250L
@@ -336,11 +464,12 @@ class AnimatedStickerCreatorViewModel(
         fun factory(
             application: Application,
             packId: String,
+            editingStickerIndex: Int? = null,
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return AnimatedStickerCreatorViewModel(application, packId) as T
+                    return AnimatedStickerCreatorViewModel(application, packId, editingStickerIndex) as T
                 }
             }
     }

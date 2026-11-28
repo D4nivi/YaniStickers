@@ -65,8 +65,8 @@ fun StaticStickerCreatorScreen(
         )
     }
 
-    LaunchedEffect(Unit) {
-        if (!launchedInitialPicker && state.sourceBitmap == null) {
+    LaunchedEffect(state.isEditMode) {
+        if (!state.isEditMode && !launchedInitialPicker && state.sourceBitmap == null && !state.isDecoding) {
             launchedInitialPicker = true
             openPhotoPicker()
         }
@@ -93,7 +93,11 @@ fun StaticStickerCreatorScreen(
                 title = {
                     Text(
                         stringResource(
-                            if (state.forTray) R.string.creator_tray_title else R.string.creator_static_title,
+                            when {
+                                state.forTray -> R.string.creator_tray_title
+                                state.isEditMode -> R.string.creator_edit_static_title
+                                else -> R.string.creator_static_title
+                            },
                         ),
                     )
                 },
@@ -163,7 +167,11 @@ fun StaticStickerCreatorScreen(
                             "Guardando..."
                         } else {
                             stringResource(
-                                if (state.forTray) R.string.action_save_tray else R.string.action_save_sticker,
+                                when {
+                                    state.forTray -> R.string.action_save_tray
+                                    state.isEditMode -> R.string.action_save_changes
+                                    else -> R.string.action_save_sticker
+                                },
                             )
                         },
                     )

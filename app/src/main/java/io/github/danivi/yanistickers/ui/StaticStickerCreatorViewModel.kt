@@ -9,11 +9,16 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.danivi.yanistickers.data.FramingMode
 import io.github.danivi.yanistickers.data.LocalPackStore
+import io.github.danivi.yanistickers.data.OpaqueContentBounds
 import io.github.danivi.yanistickers.data.PackJsonParser
 import io.github.danivi.yanistickers.data.StaticStickerEncoder
 import io.github.danivi.yanistickers.data.StickerFramingTransform
+import io.github.danivi.yanistickers.data.StickerItem
+import io.github.danivi.yanistickers.validation.ImageContainerFormat
+import io.github.danivi.yanistickers.validation.ImageContainerInspector
 import io.github.danivi.yanistickers.validation.PackValidator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,10 +28,13 @@ import kotlinx.coroutines.withContext
 
 data class StaticStickerCreatorUiState(
     val forTray: Boolean = false,
+    val isEditMode: Boolean = false,
     val packName: String = "",
     val isDecoding: Boolean = false,
     val isSaving: Boolean = false,
     val sourceBitmap: Bitmap? = null,
+    val hasReplacedSource: Boolean = false,
+    val existingAssetValid: Boolean = false,
     val transform: StickerFramingTransform = StickerFramingTransform(),
     val nameInput: String = "",
     val emojisInput: String = "😀",
@@ -69,33 +77,110 @@ class StaticStickerCreatorViewModel(
     application: Application,
     private val packId: String,
     private val forTray: Boolean,
+    private val editingStickerIndex: Int? = null,
 ) : AndroidViewModel(application) {
 
     private val store = LocalPackStore(application)
-    private val _uiState = MutableStateFlow(StaticStickerCreatorUiState(forTray = forTray))
+    private val _uiState = MutableStateFlow(
+        StaticStickerCreatorUiState(
+            forTray = forTray,
+            isEditMode = !forTray && editingStickerIndex != null,
+        ),
+    )
     val uiState: StateFlow<StaticStickerCreatorUiState> = _uiState.asStateFlow()
 
     private var currentSessionId: Long = -1L
-
-    init {
-        viewModelScope.launch {
-            val pack = withContext(Dispatchers.IO) { store.getPack(packId) }
-            _uiState.update { it.copy(packName = pack?.name.orEmpty()) }
-        }
-    }
+    private var loadSessionJob: Job? = null
+    private var existingContentBounds: OpaqueContentBounds? = null
 
     /**
-     * Reinicia el estado del creador cuando se abre una nueva sesión de añadido desde el editor,
-     * preservando el estado durante rotaciones de pantalla dentro de la misma sesión.
+     * Reinicia el estado del creador cuando se abre una nueva sesión desde el editor, preservando
+     * el estado durante rotaciones de pantalla dentro de la misma sesión. En modo edición precarga
+     * el sticker existente y sus metadatos sin abrir el selector de galería.
      */
     fun ensureSession(sessionId: Long) {
         if (currentSessionId == sessionId) return
         currentSessionId = sessionId
+        loadSessionJob?.cancel()
+        existingContentBounds = null
+        val isEdit = !forTray && editingStickerIndex != null
         val packName = _uiState.value.packName
         _uiState.value = StaticStickerCreatorUiState(
             forTray = forTray,
+            isEditMode = isEdit,
             packName = packName,
+            isDecoding = isEdit,
         )
+        loadSessionJob = viewModelScope.launch {
+            loadInitialSession(isEdit)
+        }
+    }
+
+    private suspend fun loadInitialSession(isEdit: Boolean) {
+        val loaded = withContext(Dispatchers.IO) {
+            val pack = store.getPack(packId) ?: return@withContext null
+            if (!isEdit) return@withContext LoadedEditSession(packName = pack.name)
+
+            val index = editingStickerIndex ?: return@withContext LoadedEditSession(packName = pack.name)
+            val item = pack.stickers.getOrNull(index)
+                ?: return@withContext LoadedEditSession(
+                    packName = pack.name,
+                    errorMessage = "No se encontró el sticker a editar.",
+                )
+            val assetName = PackJsonParser.extractStickerAssetName(item.file)
+            val file = assetName?.let { store.resolveAssetFile(packId, it) }
+            if (file == null) {
+                return@withContext LoadedEditSession(
+                    packName = pack.name,
+                    item = item,
+                    errorMessage = "No se encontró el archivo del sticker a editar.",
+                )
+            }
+
+            val inspected = ImageContainerInspector.inspect(file)
+            val isExistingValid = inspected != null &&
+                inspected.format == ImageContainerFormat.WEBP &&
+                !inspected.isAnimated &&
+                inspected.width == PackValidator.STICKER_DIMENSION_PX &&
+                inspected.height == PackValidator.STICKER_DIMENSION_PX &&
+                inspected.fileSizeBytes in 1L..PackValidator.MAX_STATIC_STICKER_BYTES
+            val decoded = runCatching { StaticStickerEncoder.decodeSourceBitmap(file) }
+            val decodedBitmap = decoded.getOrNull()
+            val bounds = decodedBitmap?.let { StaticStickerEncoder.computeOpaqueContentBounds(it) }
+            LoadedEditSession(
+                packName = pack.name,
+                item = item,
+                bitmap = decodedBitmap,
+                contentBounds = bounds,
+                existingAssetValid = isExistingValid,
+                errorMessage = decoded.exceptionOrNull()?.message
+                    ?: if (decoded.isFailure) "No se pudo abrir el sticker a editar." else null,
+            )
+        }
+
+        existingContentBounds = loaded?.contentBounds
+        _uiState.update { state ->
+            if (loaded == null) {
+                state.copy(
+                    isDecoding = false,
+                    message = if (isEdit) "No se encontró el pack." else state.message,
+                )
+            } else {
+                val item = loaded.item
+                state.copy(
+                    packName = loaded.packName,
+                    isDecoding = false,
+                    sourceBitmap = loaded.bitmap ?: state.sourceBitmap,
+                    hasReplacedSource = false,
+                    existingAssetValid = loaded.existingAssetValid,
+                    transform = StickerFramingTransform(mode = FramingMode.FIT),
+                    nameInput = item?.name ?: state.nameInput,
+                    emojisInput = item?.emojis?.joinToString(" ") ?: state.emojisInput,
+                    accessibilityInput = item?.accessibilityText ?: state.accessibilityInput,
+                    message = loaded.errorMessage ?: state.message,
+                )
+            }
+        }
     }
 
     fun consumeSaved() {
@@ -103,6 +188,7 @@ class StaticStickerCreatorViewModel(
     }
 
     fun onImageSelected(uri: Uri) {
+        loadSessionJob?.cancel()
         viewModelScope.launch {
             _uiState.update { it.copy(isDecoding = true) }
             val result = withContext(Dispatchers.IO) {
@@ -111,11 +197,13 @@ class StaticStickerCreatorViewModel(
                 }
             }
             result.onSuccess { bitmap ->
+                existingContentBounds = null
                 val resetTransform = StickerFramingTransform(mode = FramingMode.FIT)
                 _uiState.update {
                     it.copy(
                         isDecoding = false,
                         sourceBitmap = bitmap,
+                        hasReplacedSource = true,
                         transform = resetTransform,
                     )
                 }
@@ -132,21 +220,19 @@ class StaticStickerCreatorViewModel(
 
     fun setFramingMode(mode: FramingMode) {
         updateTransform {
-            copy(
+            StaticStickerEncoder.transformForFramingMode(
                 mode = mode,
-                zoom = 1f,
-                normalizedPanX = 0f,
-                normalizedPanY = 0f,
+                rotationDegrees = rotationDegrees,
+                contentBounds = existingContentBounds,
             )
         }
     }
 
     fun rotate90() {
         updateTransform {
-            copy(
-                rotationDegrees = (rotationDegrees + 90) % 360,
-                normalizedPanX = 0f,
-                normalizedPanY = 0f,
+            StaticStickerEncoder.rotateTransform90(
+                current = this,
+                contentBounds = existingContentBounds,
             )
         }
     }
@@ -154,7 +240,11 @@ class StaticStickerCreatorViewModel(
     fun resetTransform() {
         val currentMode = _uiState.value.transform.mode
         updateTransform {
-            StickerFramingTransform(mode = currentMode)
+            StaticStickerEncoder.transformForFramingMode(
+                mode = currentMode,
+                rotationDegrees = 0,
+                contentBounds = existingContentBounds,
+            )
         }
     }
 
@@ -197,32 +287,55 @@ class StaticStickerCreatorViewModel(
             if (current.accessibilityInput.trim().length > PackValidator.MAX_STATIC_A11Y_LENGTH) return
         }
 
+        val editIndex = editingStickerIndex?.takeIf { current.isEditMode }
+        val framingChanged = current.transform.normalized() != StickerFramingTransform(mode = FramingMode.FIT)
+        val canSkipReencode = editIndex != null && !current.hasReplacedSource && !framingChanged && current.existingAssetValid
+
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true) }
             val result = runCatching {
-                val encoded = withContext(Dispatchers.Default) {
-                    StaticStickerEncoder.renderAndEncodeWebp(
-                        sourceBitmap = bitmap,
-                        transform = current.transform,
-                        outputSizePx = current.targetDimensionPx,
-                        maxBytes = current.maxBytes,
-                    )
-                }
-                withContext(Dispatchers.IO) {
-                    if (forTray) {
-                        store.updateTrayIcon(
+                val emojis = PackJsonParser.splitEmojisGraphemes(current.emojisInput)
+                if (canSkipReencode) {
+                    withContext(Dispatchers.IO) {
+                        store.updateSticker(
                             identifier = packId,
-                            trayBytes = encoded.bytes,
-                        ) ?: error("No se encontró el pack.")
-                    } else {
-                        val emojis = PackJsonParser.splitEmojisGraphemes(current.emojisInput)
-                        store.addSticker(
-                            identifier = packId,
-                            webpBytes = encoded.bytes,
+                            stickerIndex = editIndex!!,
                             emojis = emojis,
                             accessibilityText = current.accessibilityInput,
                             name = current.nameInput,
-                        ) ?: error("No se encontró el pack.")
+                        ) ?: error("No se encontró el sticker en el pack.")
+                    }
+                } else {
+                    val encoded = withContext(Dispatchers.Default) {
+                        StaticStickerEncoder.renderAndEncodeWebp(
+                            sourceBitmap = bitmap,
+                            transform = current.transform,
+                            outputSizePx = current.targetDimensionPx,
+                            maxBytes = current.maxBytes,
+                        )
+                    }
+                    withContext(Dispatchers.IO) {
+                        when {
+                            forTray -> store.updateTrayIcon(
+                                identifier = packId,
+                                trayBytes = encoded.bytes,
+                            ) ?: error("No se encontró el pack.")
+                            editIndex != null -> store.replaceSticker(
+                                identifier = packId,
+                                stickerIndex = editIndex,
+                                webpBytes = encoded.bytes,
+                                emojis = emojis,
+                                accessibilityText = current.accessibilityInput,
+                                name = current.nameInput,
+                            ) ?: error("No se encontró el sticker en el pack.")
+                            else -> store.addSticker(
+                                identifier = packId,
+                                webpBytes = encoded.bytes,
+                                emojis = emojis,
+                                accessibilityText = current.accessibilityInput,
+                                name = current.nameInput,
+                            ) ?: error("No se encontró el pack.")
+                        }
                     }
                 }
             }
@@ -243,22 +356,36 @@ class StaticStickerCreatorViewModel(
         _uiState.update { it.copy(message = null) }
     }
 
+    override fun onCleared() {
+        loadSessionJob?.cancel()
+    }
+
     private fun updateTransform(transformBlock: StickerFramingTransform.() -> StickerFramingTransform) {
         if (_uiState.value.sourceBitmap == null) return
         val next = _uiState.value.transform.transformBlock().normalized()
         _uiState.update { it.copy(transform = next) }
     }
 
+    private data class LoadedEditSession(
+        val packName: String,
+        val item: StickerItem? = null,
+        val bitmap: Bitmap? = null,
+        val contentBounds: OpaqueContentBounds? = null,
+        val existingAssetValid: Boolean = false,
+        val errorMessage: String? = null,
+    )
+
     companion object {
         fun factory(
             application: Application,
             packId: String,
             forTray: Boolean,
+            editingStickerIndex: Int? = null,
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return StaticStickerCreatorViewModel(application, packId, forTray) as T
+                    return StaticStickerCreatorViewModel(application, packId, forTray, editingStickerIndex) as T
                 }
             }
     }

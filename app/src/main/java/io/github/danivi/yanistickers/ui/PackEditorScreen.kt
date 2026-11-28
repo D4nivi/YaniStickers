@@ -67,7 +67,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.danivi.yanistickers.R
-import io.github.danivi.yanistickers.data.PackJsonParser
 import io.github.danivi.yanistickers.data.StickerPack
 import io.github.danivi.yanistickers.validation.PackValidator
 
@@ -78,6 +77,8 @@ fun PackEditorScreen(
     onBack: () -> Unit,
     onAddStaticSticker: () -> Unit,
     onAddAnimatedSticker: () -> Unit,
+    onEditStaticSticker: (Int) -> Unit,
+    onEditAnimatedSticker: (Int) -> Unit,
     onChangeTrayIcon: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -85,7 +86,6 @@ fun PackEditorScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
-    var editingSticker by remember { mutableStateOf<EditorStickerUi?>(null) }
     var stickerPendingDelete by remember { mutableStateOf<EditorStickerUi?>(null) }
     var detailStickerFile by remember { mutableStateOf<String?>(null) }
 
@@ -109,7 +109,11 @@ fun PackEditorScreen(
             sticker = detailSticker,
             onEdit = {
                 detailStickerFile = null
-                editingSticker = detailSticker
+                if (state.pack?.animated == true) {
+                    onEditAnimatedSticker(detailSticker.index)
+                } else {
+                    onEditStaticSticker(detailSticker.index)
+                }
             },
             onSetAsTray = {
                 detailStickerFile = null
@@ -120,18 +124,6 @@ fun PackEditorScreen(
                 stickerPendingDelete = detailSticker
             },
             onDismiss = { detailStickerFile = null },
-        )
-    }
-
-    editingSticker?.let { target ->
-        EditStickerDialog(
-            sticker = target,
-            animatedPack = state.pack?.animated == true,
-            onSave = { name, emojisRaw, a11yText ->
-                editingSticker = null
-                viewModel.updateSticker(target.index, name, emojisRaw, a11yText)
-            },
-            onDismiss = { editingSticker = null },
         )
     }
 
@@ -342,7 +334,13 @@ fun PackEditorScreen(
                                     sticker = sticker,
                                     canMoveUp = sticker.index > 0,
                                     canMoveDown = sticker.index < state.stickers.lastIndex,
-                                    onEdit = { editingSticker = sticker },
+                                    onEdit = {
+                                        if (pack.animated) {
+                                            onEditAnimatedSticker(sticker.index)
+                                        } else {
+                                            onEditStaticSticker(sticker.index)
+                                        }
+                                    },
                                     onSetAsTray = { viewModel.setStickerAsTrayIcon(sticker.index) },
                                     onMoveUp = { viewModel.moveStickerUp(sticker.index) },
                                     onMoveDown = { viewModel.moveStickerDown(sticker.index) },
@@ -759,51 +757,4 @@ private fun StickerEditorRowCard(
             }
         }
     }
-}
-
-@Composable
-private fun EditStickerDialog(
-    sticker: EditorStickerUi,
-    animatedPack: Boolean,
-    onSave: (name: String, emojisRaw: String, accessibilityText: String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var nameText by remember(sticker) { mutableStateOf(sticker.item.name) }
-    var emojisText by remember(sticker) { mutableStateOf(sticker.item.emojis.joinToString(" ")) }
-    var a11yText by remember(sticker) { mutableStateOf(sticker.item.accessibilityText) }
-
-    val parsedEmojis = remember(emojisText) { PackJsonParser.splitEmojisGraphemes(emojisText) }
-    val maxA11y = if (animatedPack) PackValidator.MAX_ANIMATED_A11Y_LENGTH else PackValidator.MAX_STATIC_A11Y_LENGTH
-    val emojisValid = parsedEmojis.size in PackValidator.MIN_EMOJIS..PackValidator.MAX_EMOJIS
-    val a11yValid = a11yText.trim().length <= maxA11y
-    val dialogTitle = sticker.item.name.ifBlank { "Sticker #${sticker.index + 1}" }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Editar $dialogTitle") },
-        text = {
-            StickerMetadataEditorFields(
-                nameText = nameText,
-                onNameTextChange = { nameText = it },
-                emojisText = emojisText,
-                onEmojisTextChange = { emojisText = it },
-                accessibilityText = a11yText,
-                onAccessibilityTextChange = { a11yText = it },
-                animatedPack = animatedPack,
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSave(nameText, emojisText, a11yText) },
-                enabled = emojisValid && a11yValid,
-            ) {
-                Text(stringResource(R.string.action_save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
-    )
 }

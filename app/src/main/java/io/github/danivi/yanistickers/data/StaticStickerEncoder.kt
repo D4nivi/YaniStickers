@@ -55,6 +55,23 @@ data class StickerFramingTransform(
 }
 
 /**
+ * Rectángulo envolvente de los píxeles visibles (no transparentes) dentro de un bitmap.
+ */
+data class OpaqueContentBounds(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+    val imageWidth: Int,
+    val imageHeight: Int,
+) {
+    val width: Int get() = (right - left).coerceAtLeast(1)
+    val height: Int get() = (bottom - top).coerceAtLeast(1)
+    val fillsImage: Boolean
+        get() = left <= 0 && top <= 0 && right >= imageWidth && bottom >= imageHeight
+}
+
+/**
  * Resultado de la codificación WebP estática validado frente a los límites de WhatsApp.
  */
 data class EncodedWebpResult(
@@ -78,8 +95,17 @@ object StaticStickerEncoder {
      * Decodifica una imagen desde [uri] respetando su orientación EXIF y canal alfa, reescalando
      * entradas muy grandes para evitar picos de memoria.
      */
-    fun decodeSourceBitmap(context: Context, uri: Uri): Bitmap {
-        val source = ImageDecoder.createSource(context.contentResolver, uri)
+    fun decodeSourceBitmap(context: Context, uri: Uri): Bitmap =
+        decodeSourceBitmap(ImageDecoder.createSource(context.contentResolver, uri))
+
+    /**
+     * Decodifica una imagen local desde [file] respetando canal alfa y reescalando si supera el
+     * máximo permitido en memoria.
+     */
+    fun decodeSourceBitmap(file: File): Bitmap =
+        decodeSourceBitmap(ImageDecoder.createSource(file))
+
+    private fun decodeSourceBitmap(source: ImageDecoder.Source): Bitmap {
         return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             val srcW = info.size.width
@@ -142,6 +168,149 @@ object StaticStickerEncoder {
         return when (mode) {
             FramingMode.FIT -> min(canvasSizePx / effectiveW, canvasSizePx / effectiveH)
             FramingMode.CROP -> max(canvasSizePx / effectiveW, canvasSizePx / effectiveH)
+        }
+    }
+
+    /**
+     * Calcula la caja envolvente de los píxeles no transparentes de [bitmap].
+     */
+    fun computeOpaqueContentBounds(
+        bitmap: Bitmap,
+        alphaThreshold: Int = 8,
+    ): OpaqueContentBounds {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) {
+            return OpaqueContentBounds(0, 0, w, h, w, h)
+        }
+        val row = IntArray(w)
+        var minX = w
+        var minY = h
+        var maxX = -1
+        var maxY = -1
+        for (y in 0 until h) {
+            bitmap.getPixels(row, 0, w, 0, y, w, 1)
+            for (x in 0 until w) {
+                val alpha = (row[x] ushr 24) and 0xFF
+                if (alpha > alphaThreshold) {
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
+                }
+            }
+        }
+        return if (maxX < minX || maxY < minY) {
+            OpaqueContentBounds(0, 0, w, h, w, h)
+        } else {
+            OpaqueContentBounds(minX, minY, maxX + 1, maxY + 1, w, h)
+        }
+    }
+
+    /**
+     * Combina dos cajas envolventes para obtener la unión visible entre múltiples frames.
+     */
+    fun mergeOpaqueContentBounds(
+        current: OpaqueContentBounds?,
+        next: OpaqueContentBounds,
+    ): OpaqueContentBounds {
+        if (current == null) return next
+        return OpaqueContentBounds(
+            left = min(current.left, next.left),
+            top = min(current.top, next.top),
+            right = max(current.right, next.right),
+            bottom = max(current.bottom, next.bottom),
+            imageWidth = next.imageWidth,
+            imageHeight = next.imageHeight,
+        )
+    }
+
+    /**
+     * Calcula el encuadre `Rellenar` (`CROP`) equivalente teniendo en cuenta los márgenes
+     * transparentes de un sticker ya renderizado en `512×512`.
+     */
+    fun buildCropTransformForBounds(
+        bounds: OpaqueContentBounds?,
+        rotationDegrees: Int = 0,
+    ): StickerFramingTransform {
+        val snappedRot = (((rotationDegrees % 360) + 360) % 360 / 90) * 90 % 360
+        if (bounds == null || bounds.fillsImage) {
+            return StickerFramingTransform(
+                mode = FramingMode.CROP,
+                rotationDegrees = snappedRot,
+            ).normalized()
+        }
+        val w = bounds.imageWidth.toFloat()
+        val h = bounds.imageHeight.toFloat()
+        val rotatedOdd = snappedRot % 180 != 0
+        val effW = if (rotatedOdd) h else w
+        val effH = if (rotatedOdd) w else h
+        val rotCw = (if (rotatedOdd) bounds.height else bounds.width).toFloat()
+        val rotCh = (if (rotatedOdd) bounds.width else bounds.height).toFloat()
+        val baseScaleUnit = computeBaseScale(
+            srcWidth = bounds.imageWidth,
+            srcHeight = bounds.imageHeight,
+            canvasSizePx = 1f,
+            mode = FramingMode.CROP,
+            rotationDegrees = snappedRot,
+        )
+        val neededScaleUnit = max(1f / rotCw, 1f / rotCh)
+        val fallbackScaleUnit = max(1f / effW, 1f / effH)
+        val zoom = (neededScaleUnit / fallbackScaleUnit)
+            .coerceIn(StickerFramingTransform.MIN_ZOOM, StickerFramingTransform.MAX_ZOOM)
+
+        val dx = (bounds.left + bounds.right) / 2f - w / 2f
+        val dy = (bounds.top + bounds.bottom) / 2f - h / 2f
+        val (rx, ry) = when (snappedRot) {
+            90 -> -dy to dx
+            180 -> -dx to -dy
+            270 -> dy to -dx
+            else -> dx to dy
+        }
+        val panX = -rx * baseScaleUnit * zoom
+        val panY = -ry * baseScaleUnit * zoom
+        return StickerFramingTransform(
+            mode = FramingMode.CROP,
+            zoom = zoom,
+            normalizedPanX = panX,
+            normalizedPanY = panY,
+            rotationDegrees = snappedRot,
+        ).normalized()
+    }
+
+    /**
+     * Calcula la transformación al cambiar entre `Encajar` (`FIT`) y `Rellenar` (`CROP`),
+     * adaptando `CROP` al contenido visible cuando se edita un sticker `512×512`.
+     */
+    fun transformForFramingMode(
+        mode: FramingMode,
+        rotationDegrees: Int,
+        contentBounds: OpaqueContentBounds?,
+    ): StickerFramingTransform = when (mode) {
+        FramingMode.FIT -> StickerFramingTransform(
+            mode = FramingMode.FIT,
+            rotationDegrees = rotationDegrees,
+        ).normalized()
+        FramingMode.CROP -> buildCropTransformForBounds(contentBounds, rotationDegrees)
+    }
+
+    /**
+     * Rota 90° la transformación actual manteniendo el ajuste `Rellenar` sobre [contentBounds]
+     * cuando está activo en modo edición.
+     */
+    fun rotateTransform90(
+        current: StickerFramingTransform,
+        contentBounds: OpaqueContentBounds?,
+    ): StickerFramingTransform {
+        val nextRot = (current.rotationDegrees + 90) % 360
+        return if (current.mode == FramingMode.CROP && contentBounds != null && !contentBounds.fillsImage) {
+            buildCropTransformForBounds(contentBounds, nextRot)
+        } else {
+            current.copy(
+                rotationDegrees = nextRot,
+                normalizedPanX = 0f,
+                normalizedPanY = 0f,
+            ).normalized()
         }
     }
 

@@ -37,6 +37,7 @@ data class AnimatedSourceProbe(
     val frameDurationsMs: List<Int>,
     val previewBitmap: Bitmap,
     val inspectedWebp: InspectedImageInfo? = null,
+    val contentBounds: OpaqueContentBounds? = null,
 ) {
     /**
      * Indica si la entrada ya es un WebP animado que cumple íntegramente los requisitos de WhatsApp
@@ -122,8 +123,33 @@ object AnimatedFrameExtractor {
         return when {
             isWebpHeader(header) -> probeWebp(tempFile)
             isGifHeader(header) || mimeType.contains("gif") -> probeGif(tempFile)
+            isStaticRasterHeader(header) ||
+                (mimeType.startsWith("image/") && !mimeType.contains("webp") && !mimeType.contains("gif")) -> {
+                error("La imagen seleccionada no es animada. Elige un vídeo, GIF o WebP animado.")
+            }
             else -> probeVideo(tempFile)
         }
+    }
+
+    /**
+     * Copia un sticker WebP ya guardado a [sessionDir] para editarlo de forma aislada respecto al
+     * archivo persistido en el pack y analiza su estructura animada y límites visibles.
+     */
+    fun probeExistingWebpSticker(
+        sourceFile: File,
+        sessionDir: File,
+    ): AnimatedSourceProbe {
+        sessionDir.mkdirs()
+        val tempFile = File(sessionDir, "source_edit_${System.nanoTime()}.webp")
+        sourceFile.copyTo(tempFile, overwrite = true)
+        val probe = probeWebp(tempFile)
+        val info = probe.inspectedWebp
+        val bounds = if (info != null && info.frameCount > 0) {
+            measureWebpOpaqueBounds(tempFile.readBytes(), probe.width, probe.height, info.frameCount)
+        } else {
+            StaticStickerEncoder.computeOpaqueContentBounds(probe.previewBitmap)
+        }
+        return probe.copy(contentBounds = bounds)
     }
 
     /**
@@ -581,5 +607,52 @@ object AnimatedFrameExtractor {
         if (bytes.size < 6) return false
         val header = String(bytes, 0, 6, Charsets.US_ASCII)
         return header == "GIF87a" || header == "GIF89a"
+    }
+
+    private fun isStaticRasterHeader(bytes: ByteArray): Boolean {
+        val isJpeg = bytes.size >= 3 &&
+            bytes[0] == 0xFF.toByte() &&
+            bytes[1] == 0xD8.toByte() &&
+            bytes[2] == 0xFF.toByte()
+        val isPng = bytes.size >= 8 &&
+            bytes[0] == 0x89.toByte() &&
+            bytes[1] == 0x50.toByte() &&
+            bytes[2] == 0x4E.toByte() &&
+            bytes[3] == 0x47.toByte()
+        val isBmp = bytes.size >= 2 &&
+            bytes[0] == 'B'.code.toByte() &&
+            bytes[1] == 'M'.code.toByte()
+        return isJpeg || isPng || isBmp
+    }
+
+    private fun measureWebpOpaqueBounds(
+        bytes: ByteArray,
+        width: Int,
+        height: Int,
+        frameCount: Int,
+    ): OpaqueContentBounds {
+        val sampleIndices = if (frameCount <= 5) {
+            (0 until frameCount).toSet()
+        } else {
+            setOf(0, frameCount / 4, frameCount / 2, (frameCount * 3) / 4, frameCount - 1)
+        }
+        var union: OpaqueContentBounds? = null
+        NativeWebpCodec.openDecoder(bytes).use { decoder ->
+            val frame = Bitmap.createBitmap(decoder.width, decoder.height, Bitmap.Config.ARGB_8888)
+            try {
+                var idx = 0
+                while (idx < frameCount) {
+                    decoder.decodeNextFrame(frame) ?: break
+                    if (idx in sampleIndices) {
+                        val frameBounds = StaticStickerEncoder.computeOpaqueContentBounds(frame)
+                        union = StaticStickerEncoder.mergeOpaqueContentBounds(union, frameBounds)
+                    }
+                    idx++
+                }
+            } finally {
+                frame.recycle()
+            }
+        }
+        return union ?: OpaqueContentBounds(0, 0, width, height, width, height)
     }
 }

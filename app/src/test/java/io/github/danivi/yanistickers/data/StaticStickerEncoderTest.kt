@@ -98,4 +98,48 @@ class StaticStickerEncoderTest {
         assertEquals(StickerFramingTransform.MAX_PAN_FRACTION, clamped.normalizedPanY, 0.0001f)
         assertEquals(90, clamped.rotationDegrees)
     }
+
+    @Test
+    fun buildCropTransformForBounds_zoomsAndCentersTransparentMargins() {
+        // Banda transparente superior/inferior (512x256 centrado en 512x512) -> zoom 2x centrado
+        val letterbox = OpaqueContentBounds(
+            left = 0,
+            top = 128,
+            right = 512,
+            bottom = 384,
+            imageWidth = 512,
+            imageHeight = 512,
+        )
+        val letterboxCrop = StaticStickerEncoder.buildCropTransformForBounds(letterbox, rotationDegrees = 0)
+        assertEquals(FramingMode.CROP, letterboxCrop.mode)
+        assertEquals(2f, letterboxCrop.zoom, 0.0001f)
+        assertEquals(0f, letterboxCrop.normalizedPanX, 0.0001f)
+        assertEquals(0f, letterboxCrop.normalizedPanY, 0.0001f)
+
+        // Contenido descentrado arriba (y=0..256) -> zoom 2x y paneo +0.5 en Y; al rotar 90° pasa a -0.5 en X
+        val topHalf = OpaqueContentBounds(
+            left = 0,
+            top = 0,
+            right = 512,
+            bottom = 256,
+            imageWidth = 512,
+            imageHeight = 512,
+        )
+        val topCrop0 = StaticStickerEncoder.buildCropTransformForBounds(topHalf, rotationDegrees = 0)
+        assertEquals(2f, topCrop0.zoom, 0.0001f)
+        assertEquals(0f, topCrop0.normalizedPanX, 0.0001f)
+        assertEquals(0.5f, topCrop0.normalizedPanY, 0.0001f)
+
+        val topCrop90 = StaticStickerEncoder.buildCropTransformForBounds(topHalf, rotationDegrees = 90)
+        assertEquals(2f, topCrop90.zoom, 0.0001f)
+        assertEquals(-0.5f, topCrop90.normalizedPanX, 0.0001f)
+        assertEquals(0f, topCrop90.normalizedPanY, 0.0001f)
+
+        // Imagen ya opaca de borde a borde -> zoom 1x
+        val full = OpaqueContentBounds(0, 0, 512, 512, 512, 512)
+        val fullCrop = StaticStickerEncoder.buildCropTransformForBounds(full, rotationDegrees = 0)
+        assertEquals(1f, fullCrop.zoom, 0.0001f)
+        assertEquals(0f, fullCrop.normalizedPanX, 0.0001f)
+        assertEquals(0f, fullCrop.normalizedPanY, 0.0001f)
+    }
 }

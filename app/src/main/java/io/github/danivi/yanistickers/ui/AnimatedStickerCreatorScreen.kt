@@ -114,7 +114,7 @@ fun AnimatedStickerCreatorScreen(
 
     fun openVideoPicker() {
         videoPickerLauncher.launch(
-            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
         )
     }
 
@@ -122,8 +122,8 @@ fun AnimatedStickerCreatorScreen(
         documentPickerLauncher.launch(arrayOf("image/webp", "image/gif", "video/*"))
     }
 
-    LaunchedEffect(Unit) {
-        if (!launchedInitialPicker && state.probe == null && !state.isProbing) {
+    LaunchedEffect(state.isEditMode) {
+        if (!state.isEditMode && !launchedInitialPicker && state.probe == null && !state.isProbing) {
             launchedInitialPicker = true
             openVideoPicker()
         }
@@ -146,7 +146,9 @@ fun AnimatedStickerCreatorScreen(
         val percent = (state.saveProgress * 100f).roundToInt().coerceIn(0, 100)
         AlertDialog(
             onDismissRequest = {},
-            title = { Text("Creando sticker animado") },
+            title = {
+                Text(if (state.isEditMode) "Actualizando sticker animado" else "Creando sticker animado")
+            },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -181,7 +183,13 @@ fun AnimatedStickerCreatorScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.creator_animated_title)) },
+                title = {
+                    Text(
+                        stringResource(
+                            if (state.isEditMode) R.string.creator_edit_animated_title else R.string.creator_animated_title,
+                        ),
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -285,7 +293,11 @@ fun AnimatedStickerCreatorScreen(
                     enabled = state.canSave,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(stringResource(R.string.action_save_sticker))
+                    Text(
+                        stringResource(
+                            if (state.isEditMode) R.string.action_save_changes else R.string.action_save_sticker,
+                        ),
+                    )
                 }
             }
         }
@@ -316,7 +328,7 @@ private fun EmptyAnimatedSelectionCard(
                     tint = MaterialTheme.colorScheme.primary,
                 )
                 Text(
-                    text = "Elige un vídeo (o importa un GIF / WebP animado desde Archivos). Se convertirá a WebP animado al guardar.",
+                    text = "Elige un vídeo o GIF (o importa un WebP/GIF desde Archivos). Se convertirá a WebP animado al guardar.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

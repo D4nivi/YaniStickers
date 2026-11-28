@@ -26,12 +26,15 @@
     <string name="action_set_as_tray">Poner como icono del pack</string>
     <string name="action_use_as_tray_short">Usar como icono</string>
     <string name="creator_static_title">Nuevo sticker estático</string>
+    <string name="creator_edit_static_title">Editar sticker estático</string>
     <string name="creator_animated_title">Nuevo sticker animado</string>
+    <string name="creator_edit_animated_title">Editar sticker animado</string>
     <string name="creator_tray_title">Icono de bandeja</string>
     <string name="action_pick_image">Elegir imagen</string>
-    <string name="action_pick_media">Elegir vídeo</string>
+    <string name="action_pick_media">Elegir vídeo o GIF</string>
     <string name="action_pick_document">Archivo (.webp / .gif / .mp4)</string>
     <string name="action_save_sticker">Guardar sticker</string>
+    <string name="action_save_changes">Guardar cambios</string>
     <string name="action_save_tray">Guardar icono</string>
     <string name="creator_advanced">Avanzado</string>
     <string name="badge_animated">Animado</string>

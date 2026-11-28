@@ -85,6 +85,23 @@ class MainActivity : ComponentActivity() {
                                     ),
                                 )
                             },
+                            onEditStaticSticker = { stickerIndex ->
+                                backStack.add(
+                                    AppScreen.StaticStickerCreator(
+                                        packId = currentScreen.packId,
+                                        forTray = false,
+                                        editingStickerIndex = stickerIndex,
+                                    ),
+                                )
+                            },
+                            onEditAnimatedSticker = { stickerIndex ->
+                                backStack.add(
+                                    AppScreen.AnimatedStickerCreator(
+                                        packId = currentScreen.packId,
+                                        editingStickerIndex = stickerIndex,
+                                    ),
+                                )
+                            },
                             onChangeTrayIcon = {
                                 backStack.add(
                                     AppScreen.StaticStickerCreator(
@@ -97,11 +114,12 @@ class MainActivity : ComponentActivity() {
                     }
                     is AppScreen.StaticStickerCreator -> {
                         val creatorViewModel: StaticStickerCreatorViewModel = viewModel(
-                            key = "creator_${currentScreen.packId}_${currentScreen.forTray}",
+                            key = "creator_${currentScreen.packId}_${currentScreen.forTray}_${currentScreen.editingStickerIndex}",
                             factory = StaticStickerCreatorViewModel.factory(
                                 application = app,
                                 packId = currentScreen.packId,
                                 forTray = currentScreen.forTray,
+                                editingStickerIndex = currentScreen.editingStickerIndex,
                             ),
                         )
                         remember(currentScreen.sessionId) {
@@ -117,10 +135,11 @@ class MainActivity : ComponentActivity() {
                     }
                     is AppScreen.AnimatedStickerCreator -> {
                         val animatedViewModel: AnimatedStickerCreatorViewModel = viewModel(
-                            key = "animated_creator_${currentScreen.packId}",
+                            key = "animated_creator_${currentScreen.packId}_${currentScreen.editingStickerIndex}",
                             factory = AnimatedStickerCreatorViewModel.factory(
                                 application = app,
                                 packId = currentScreen.packId,
+                                editingStickerIndex = currentScreen.editingStickerIndex,
                             ),
                         )
                         remember(currentScreen.sessionId) {

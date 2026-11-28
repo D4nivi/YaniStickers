@@ -200,32 +200,11 @@ class LocalPackStore(
         require(loaded.pack.stickers.size < MAX_STICKERS_PER_PACK) {
             "El pack ya alcanzó el máximo de $MAX_STICKERS_PER_PACK stickers."
         }
-        require(webpBytes.isNotEmpty()) {
-            "El archivo del sticker no puede estar vacío."
-        }
-
-        val cleanEmojis = emojis.map { it.trim() }.filter { it.isNotEmpty() }
-        require(cleanEmojis.isNotEmpty()) {
-            "Debe asociarse al menos 1 emoji al sticker."
-        }
-
-        val stickersDir = File(loaded.directory, STICKERS_DIR_NAME)
-        check(stickersDir.mkdirs() || stickersDir.isDirectory) {
-            "No se pudo crear la carpeta de stickers."
-        }
-
-        var fileName: String
-        do {
-            val suffix = UUID.randomUUID().toString().replace("-", "").take(10)
-            fileName = "stk_$suffix.webp"
-        } while (File(stickersDir, fileName).exists())
-
-        val targetFile = resolveInside(loaded.directory, "$STICKERS_DIR_NAME/$fileName")
-            ?: error("Ruta inválida para el sticker '$fileName'.")
-        writeBytesAtomically(targetFile, webpBytes)
+        val cleanEmojis = cleanAndRequireEmojis(emojis)
+        val relativeStickerPath = writeNewStickerFile(loaded.directory, webpBytes)
 
         val updatedStickers = loaded.pack.stickers + StickerItem(
-            file = "$STICKERS_DIR_NAME/$fileName",
+            file = relativeStickerPath,
             emojis = cleanEmojis,
             accessibilityText = accessibilityText.trim(),
             name = name.trim(),
@@ -256,6 +235,40 @@ class LocalPackStore(
             stickers = updatedStickers,
         )
         writePackJsonAtomically(loaded.directory, updated)
+        updated
+    }
+
+    /**
+     * Sustituye en su misma posición el archivo y los metadatos del sticker [stickerIndex] en el
+     * pack [identifier], elimina el archivo anterior si deja de estar referenciado e incrementa
+     * `imageDataVersion`.
+     */
+    fun replaceSticker(
+        identifier: String,
+        stickerIndex: Int,
+        webpBytes: ByteArray,
+        emojis: List<String>,
+        accessibilityText: String = "",
+        name: String = "",
+    ): StickerPack? = synchronized(STORE_LOCK) {
+        val loaded = findLoadedPack(identifier) ?: return null
+        if (stickerIndex !in loaded.pack.stickers.indices) return null
+
+        val cleanEmojis = cleanAndRequireEmojis(emojis)
+        val relativeStickerPath = writeNewStickerFile(loaded.directory, webpBytes)
+
+        val previousItem = loaded.pack.stickers[stickerIndex]
+        val updatedStickers = loaded.pack.stickers.toMutableList().apply {
+            this[stickerIndex] = StickerItem(
+                file = relativeStickerPath,
+                emojis = cleanEmojis,
+                accessibilityText = accessibilityText.trim(),
+                name = name.trim(),
+            )
+        }
+        val updated = loaded.pack.withNextEditVersion(stickers = updatedStickers)
+        writePackJsonAtomically(loaded.directory, updated)
+        deleteStickerFileIfUnreferenced(loaded.directory, previousItem.file, updatedStickers)
         updated
     }
 
@@ -357,14 +370,7 @@ class LocalPackStore(
         val removed = remaining.removeAt(stickerIndex)
         val updated = loaded.pack.withNextEditVersion(stickers = remaining)
         writePackJsonAtomically(loaded.directory, updated)
-
-        val assetName = PackJsonParser.extractStickerAssetName(removed.file)
-        if (assetName != null && remaining.none { PackJsonParser.extractStickerAssetName(it.file) == assetName }) {
-            val target = resolveInside(loaded.directory, "$STICKERS_DIR_NAME/$assetName")
-            if (target != null && target.isFile) {
-                target.delete()
-            }
-        }
+        deleteStickerFileIfUnreferenced(loaded.directory, removed.file, remaining)
         updated
     }
 
@@ -539,6 +545,49 @@ class LocalPackStore(
             stickers = stickers,
             updatedAt = nowIsoUtc(),
         )
+    }
+
+    private fun cleanAndRequireEmojis(emojis: List<String>): List<String> {
+        val cleanEmojis = emojis.map { it.trim() }.filter { it.isNotEmpty() }
+        require(cleanEmojis.isNotEmpty()) {
+            "Debe asociarse al menos 1 emoji al sticker."
+        }
+        return cleanEmojis
+    }
+
+    private fun writeNewStickerFile(packDir: File, webpBytes: ByteArray): String {
+        require(webpBytes.isNotEmpty()) {
+            "El archivo del sticker no puede estar vacío."
+        }
+        val stickersDir = File(packDir, STICKERS_DIR_NAME)
+        check(stickersDir.mkdirs() || stickersDir.isDirectory) {
+            "No se pudo crear la carpeta de stickers."
+        }
+        var fileName: String
+        do {
+            val suffix = UUID.randomUUID().toString().replace("-", "").take(10)
+            fileName = "stk_$suffix.webp"
+        } while (File(stickersDir, fileName).exists())
+
+        val relativePath = "$STICKERS_DIR_NAME/$fileName"
+        val targetFile = resolveInside(packDir, relativePath)
+            ?: error("Ruta inválida para el sticker '$fileName'.")
+        writeBytesAtomically(targetFile, webpBytes)
+        return relativePath
+    }
+
+    private fun deleteStickerFileIfUnreferenced(
+        packDir: File,
+        storedFile: String,
+        remainingStickers: List<StickerItem>,
+    ) {
+        val assetName = PackJsonParser.extractStickerAssetName(storedFile) ?: return
+        if (remainingStickers.none { PackJsonParser.extractStickerAssetName(it.file) == assetName }) {
+            val target = resolveInside(packDir, "$STICKERS_DIR_NAME/$assetName")
+            if (target != null && target.isFile) {
+                target.delete()
+            }
+        }
     }
 
     private fun writeBytesAtomically(targetFile: File, bytes: ByteArray) {

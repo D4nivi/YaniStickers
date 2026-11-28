@@ -225,4 +225,68 @@ class LocalPackStoreTest {
         val report = PackValidator.validate(store, loaded)
         assertTrue(report.isValid)
     }
+
+    @Test
+    fun replaceSticker_updatesInPlaceCleansOldFileAndBumpsVersion() {
+        val packsRoot = tempFolder.newFolder("packs_replace")
+        val autoTrayBytes = TestImageBuilders.staticVp8lWebp(96, 96)
+        val store = LocalPackStore(
+            packsRootDir = packsRoot,
+            stickerToTrayConverter = { autoTrayBytes },
+        )
+        val created = store.createPack(name = "Reemplazo", publisher = "Yani", animated = false)
+
+        val bytesA = TestImageBuilders.staticVp8lWebp(512, 512)
+        val bytesB = TestImageBuilders.staticVp8lWebp(512, 512) + byteArrayOf(1, 2, 3)
+        val bytesC = TestImageBuilders.staticVp8lWebp(512, 512) + byteArrayOf(4, 5, 6)
+
+        store.addSticker(created.identifier, bytesA, listOf("😀"), name = "Uno")
+        store.addSticker(created.identifier, bytesB, listOf("😂"), name = "Dos")
+        val beforeReplace = store.addSticker(created.identifier, bytesC, listOf("❤️"), name = "Tres")!!
+
+        val oldMiddleAsset = PackJsonParser.extractStickerAssetName(beforeReplace.stickers[1].file)!!
+        val versionBefore = beforeReplace.imageDataVersion.toInt()
+        val trayBefore = store.resolveAssetFile(created.identifier, beforeReplace.trayImageFile)!!.readBytes()
+
+        val newBytes = TestImageBuilders.staticVp8lWebp(512, 512) + byteArrayOf(9, 8, 7)
+        val replaced = store.replaceSticker(
+            identifier = created.identifier,
+            stickerIndex = 1,
+            webpBytes = newBytes,
+            emojis = listOf("🔥", "✨"),
+            accessibilityText = "Sticker editado",
+            name = "Dos editado",
+        )!!
+
+        assertEquals(3, replaced.stickers.size)
+        assertEquals((versionBefore + 1).toString(), replaced.imageDataVersion)
+        assertEquals(beforeReplace.stickers[0], replaced.stickers[0])
+        assertEquals(beforeReplace.stickers[2], replaced.stickers[2])
+        assertEquals(listOf("🔥", "✨"), replaced.stickers[1].emojis)
+        assertEquals("Sticker editado", replaced.stickers[1].accessibilityText)
+        assertEquals("Dos editado", replaced.stickers[1].name)
+
+        val newMiddleAsset = PackJsonParser.extractStickerAssetName(replaced.stickers[1].file)!!
+        assertNotEquals(oldMiddleAsset, newMiddleAsset)
+        assertNull(store.resolveAssetFile(created.identifier, oldMiddleAsset))
+        assertArrayEquals(newBytes, store.resolveAssetFile(created.identifier, newMiddleAsset)!!.readBytes())
+        assertArrayEquals(trayBefore, store.resolveAssetFile(created.identifier, replaced.trayImageFile)!!.readBytes())
+
+        // Índice fuera de rango devuelve null sin alterar el pack
+        assertNull(store.replaceSticker(created.identifier, 99, newBytes, listOf("😀")))
+
+        // Bytes vacíos o lista de emojis vacía son rechazados
+        try {
+            store.replaceSticker(created.identifier, 1, ByteArray(0), listOf("😀"))
+            org.junit.Assert.fail("No debería aceptar bytes vacíos.")
+        } catch (_: IllegalArgumentException) {
+            // Esperado
+        }
+        try {
+            store.replaceSticker(created.identifier, 1, newBytes, emptyList())
+            org.junit.Assert.fail("No debería aceptar emojis vacíos.")
+        } catch (_: IllegalArgumentException) {
+            // Esperado
+        }
+    }
 }

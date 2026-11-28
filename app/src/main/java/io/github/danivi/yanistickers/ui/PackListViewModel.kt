@@ -11,6 +11,9 @@ import io.github.danivi.yanistickers.data.LocalPackStore
 import io.github.danivi.yanistickers.data.PackJsonParser
 import io.github.danivi.yanistickers.data.SeedPackInstaller
 import io.github.danivi.yanistickers.data.StickerPack
+import io.github.danivi.yanistickers.update.ApkInstaller
+import io.github.danivi.yanistickers.update.GitHubUpdateClient
+import io.github.danivi.yanistickers.update.UpdateReleaseInfo
 import io.github.danivi.yanistickers.validation.PackValidationReport
 import io.github.danivi.yanistickers.validation.PackValidator
 import io.github.danivi.yanistickers.whatsapp.PackWhitelistStatus
@@ -40,12 +43,25 @@ data class PackSummaryUi(
     val whitelistStatus: PackWhitelistStatus,
 )
 
+data class AppUpdateUiState(
+    val currentVersionName: String = "1.0.0",
+    val availableRelease: UpdateReleaseInfo? = null,
+    val pendingConfirmationRelease: UpdateReleaseInfo? = null,
+    val isChecking: Boolean = false,
+    val isDownloading: Boolean = false,
+    val downloadProgressPercent: Int? = null,
+    val statusMessage: String? = null,
+    val errorMessage: String? = null,
+    val needsInstallPermissionPrompt: Boolean = false,
+)
+
 data class PackListUiState(
     val isLoading: Boolean = true,
     val packs: List<PackSummaryUi> = emptyList(),
     val sortOption: PackSortOption = PackSortOption.CREATED_DESC,
     val installedTargets: List<WhatsAppTarget> = emptyList(),
     val message: String? = null,
+    val updateState: AppUpdateUiState = AppUpdateUiState(),
 )
 
 /**
@@ -56,12 +72,18 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
     private val store = LocalPackStore(application)
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val _uiState = MutableStateFlow(
-        PackListUiState(sortOption = readSavedSortOption()),
+        PackListUiState(
+            sortOption = readSavedSortOption(),
+            updateState = AppUpdateUiState(
+                currentVersionName = ApkInstaller.readInstalledVersionName(application),
+            ),
+        ),
     )
     val uiState: StateFlow<PackListUiState> = _uiState.asStateFlow()
 
     init {
         refresh()
+        checkForUpdatesOnStartup()
     }
 
     fun setSortOption(option: PackSortOption) {
@@ -220,6 +242,207 @@ class PackListViewModel(application: Application) : AndroidViewModel(application
 
     fun consumeMessage() {
         _uiState.update { it.copy(message = null) }
+    }
+
+    fun checkForUpdatesManually() {
+        val currentUpdate = _uiState.value.updateState
+        if (currentUpdate.isChecking || currentUpdate.isDownloading) return
+
+        viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    updateState = state.updateState.copy(
+                        isChecking = true,
+                        statusMessage = null,
+                        errorMessage = null,
+                        pendingConfirmationRelease = null,
+                    ),
+                )
+            }
+
+            val versionName = _uiState.value.updateState.currentVersionName
+            val result = runCatching { GitHubUpdateClient.fetchLatestUpdate(versionName) }
+            result.onSuccess { release ->
+                _uiState.update { state ->
+                    if (release != null) {
+                        state.copy(
+                            updateState = state.updateState.copy(
+                                isChecking = false,
+                                availableRelease = release,
+                                pendingConfirmationRelease = release,
+                            ),
+                        )
+                    } else {
+                        state.copy(
+                            updateState = state.updateState.copy(
+                                isChecking = false,
+                                availableRelease = null,
+                                pendingConfirmationRelease = null,
+                                statusMessage = "Ya tienes la última versión ($versionName).",
+                            ),
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                _uiState.update { state ->
+                    state.copy(
+                        updateState = state.updateState.copy(
+                            isChecking = false,
+                            errorMessage = error.message ?: "No se pudo comprobar si hay actualizaciones.",
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissPendingConfirmation() {
+        _uiState.update { state ->
+            state.copy(
+                updateState = state.updateState.copy(pendingConfirmationRelease = null),
+            )
+        }
+    }
+
+    fun startOrResumeUpdateInstallation() {
+        val updateState = _uiState.value.updateState
+        if (updateState.isDownloading) return
+        val release = updateState.pendingConfirmationRelease ?: updateState.availableRelease ?: return
+
+        val app = getApplication<Application>()
+        if (!ApkInstaller.canInstallPackages(app)) {
+            _uiState.update { state ->
+                state.copy(
+                    updateState = state.updateState.copy(
+                        needsInstallPermissionPrompt = true,
+                        errorMessage = null,
+                    ),
+                )
+            }
+            return
+        }
+
+        downloadAndInstallRelease(release)
+    }
+
+    fun dismissInstallPermissionPrompt() {
+        _uiState.update { state ->
+            state.copy(
+                updateState = state.updateState.copy(needsInstallPermissionPrompt = false),
+            )
+        }
+    }
+
+    fun onUnknownSourcesSettingsReturned() {
+        val app = getApplication<Application>()
+        if (ApkInstaller.canInstallPackages(app)) {
+            _uiState.update { state ->
+                state.copy(
+                    updateState = state.updateState.copy(needsInstallPermissionPrompt = false),
+                )
+            }
+            startOrResumeUpdateInstallation()
+        } else {
+            _uiState.update { state ->
+                state.copy(
+                    updateState = state.updateState.copy(
+                        needsInstallPermissionPrompt = false,
+                        errorMessage = "Permiso necesario para instalar la actualización.",
+                    ),
+                )
+            }
+        }
+    }
+
+    fun onAboutDialogClosed() {
+        _uiState.update { state ->
+            state.copy(
+                updateState = state.updateState.copy(
+                    pendingConfirmationRelease = null,
+                    statusMessage = null,
+                    errorMessage = null,
+                    needsInstallPermissionPrompt = false,
+                ),
+            )
+        }
+    }
+
+    private fun checkForUpdatesOnStartup() {
+        viewModelScope.launch {
+            val versionName = _uiState.value.updateState.currentVersionName
+            val release = runCatching { GitHubUpdateClient.fetchLatestUpdate(versionName) }.getOrNull()
+            if (release != null) {
+                _uiState.update { state ->
+                    state.copy(
+                        updateState = state.updateState.copy(availableRelease = release),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun downloadAndInstallRelease(release: UpdateReleaseInfo) {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            _uiState.update { state ->
+                state.copy(
+                    updateState = state.updateState.copy(
+                        needsInstallPermissionPrompt = false,
+                        pendingConfirmationRelease = null,
+                        isDownloading = true,
+                        downloadProgressPercent = 0,
+                        statusMessage = null,
+                        errorMessage = null,
+                    ),
+                )
+            }
+
+            val updatesDir = File(app.cacheDir, "updates")
+            val downloadResult = runCatching {
+                GitHubUpdateClient.downloadApk(
+                    release = release,
+                    updatesDir = updatesDir,
+                    onProgress = { percent ->
+                        _uiState.update { state ->
+                            state.copy(
+                                updateState = state.updateState.copy(downloadProgressPercent = percent),
+                            )
+                        }
+                    },
+                )
+            }
+
+            downloadResult.onSuccess { apkFile ->
+                _uiState.update { state ->
+                    state.copy(
+                        updateState = state.updateState.copy(
+                            isDownloading = false,
+                            downloadProgressPercent = null,
+                        ),
+                    )
+                }
+                val launchResult = ApkInstaller.launchApkInstaller(app, apkFile)
+                launchResult.onFailure { error ->
+                    _uiState.update { state ->
+                        state.copy(
+                            updateState = state.updateState.copy(
+                                errorMessage = error.message ?: "No se pudo abrir el instalador de Android.",
+                            ),
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                _uiState.update { state ->
+                    state.copy(
+                        updateState = state.updateState.copy(
+                            isDownloading = false,
+                            downloadProgressPercent = null,
+                            errorMessage = error.message ?: "No se pudo descargar la actualización.",
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     companion object {

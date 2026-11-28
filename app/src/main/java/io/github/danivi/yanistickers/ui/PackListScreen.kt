@@ -94,6 +94,7 @@ import io.github.danivi.yanistickers.ui.theme.OnIconActionContainer
 import io.github.danivi.yanistickers.ui.theme.OnStaticBadgeContainer
 import io.github.danivi.yanistickers.ui.theme.StaticBadgeBorder
 import io.github.danivi.yanistickers.ui.theme.StaticBadgeContainer
+import io.github.danivi.yanistickers.update.ApkInstaller
 import io.github.danivi.yanistickers.validation.PackValidator
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -109,8 +110,16 @@ fun PackListScreen(
     val playMeow = rememberMeowSoundPlayer()
     var showCreateDialog by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
     var packPendingDelete by remember { mutableStateOf<PackSummaryUi?>(null) }
     var pendingExportPackId by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+
+    val unknownSourcesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+    ) {
+        viewModel.onUnknownSourcesSettingsReturned()
+    }
 
     val exportSingleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip"),
@@ -141,6 +150,23 @@ fun PackListScreen(
                 viewModel.createPack(name, publisher, animated, onCreated = onOpenEditor)
             },
             onDismiss = { showCreateDialog = false },
+        )
+    }
+
+    if (showAboutDialog) {
+        AboutUpdateDialog(
+            updateState = state.updateState,
+            onCheckUpdates = viewModel::checkForUpdatesManually,
+            onInstallUpdate = viewModel::startOrResumeUpdateInstallation,
+            onDismissPendingConfirmation = viewModel::dismissPendingConfirmation,
+            onOpenInstallPermissionSettings = {
+                unknownSourcesLauncher.launch(ApkInstaller.createUnknownSourcesSettingsIntent(context))
+            },
+            onDismissInstallPermissionPrompt = viewModel::dismissInstallPermissionPrompt,
+            onDismiss = {
+                showAboutDialog = false
+                viewModel.onAboutDialogClosed()
+            },
         )
     }
 
@@ -242,6 +268,10 @@ fun PackListScreen(
                             contentDescription = stringResource(R.string.action_backup),
                         )
                     }
+                    AboutHeaderButton(
+                        hasUpdate = state.updateState.availableRelease != null,
+                        onClick = { showAboutDialog = true },
+                    )
                 },
             )
         },

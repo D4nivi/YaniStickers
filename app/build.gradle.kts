@@ -9,12 +9,30 @@ android {
         version = release(37)
     }
 
+    val ciVersionName = (providers.gradleProperty("appVersionName").orNull
+        ?: providers.environmentVariable("APP_VERSION_NAME").orNull)
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val ciVersionCode = (providers.gradleProperty("appVersionCode").orNull
+        ?: providers.environmentVariable("APP_VERSION_CODE").orNull)
+        ?.trim()
+        ?.toIntOrNull()
+
+    val keystorePath = providers.environmentVariable("SIGNING_KEYSTORE_PATH").orNull?.takeIf { it.isNotBlank() }
+    val keystorePassword = providers.environmentVariable("SIGNING_KEYSTORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
+    val releaseKeyAlias = providers.environmentVariable("SIGNING_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
+    val releaseKeyPassword = providers.environmentVariable("SIGNING_KEY_PASSWORD").orNull?.takeIf { it.isNotBlank() }
+    val hasReleaseSigning = keystorePath != null &&
+        keystorePassword != null &&
+        releaseKeyAlias != null &&
+        releaseKeyPassword != null
+
     defaultConfig {
         applicationId = "io.github.danivi.yanistickers"
         minSdk = 30
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = ciVersionCode ?: 10000
+        versionName = ciVersionName ?: "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
@@ -28,8 +46,22 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = keystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                 enable = false
             }

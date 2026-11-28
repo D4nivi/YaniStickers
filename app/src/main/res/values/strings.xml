@@ -44,4 +44,11 @@
     <string name="choose_whatsapp_title">Elige la app de destino</string>
     <string name="cancel">Cancelar</string>
     <string name="editor_title">Editar pack</string>
+    <string name="action_about">Acerca de</string>
+    <string name="about_version_format">Versión %1$s</string>
+    <string name="update_action_check">Buscar actualizaciones</string>
+    <string name="update_action_checking">Buscando actualizaciones…</string>
+    <string name="update_action_install">Instalar actualización</string>
+    <string name="update_action_install_now">Instalar ahora</string>
+    <string name="update_action_later">Ahora no</string>
 </resources>

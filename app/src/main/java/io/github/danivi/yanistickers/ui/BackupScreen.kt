@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -48,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -229,7 +231,7 @@ private fun SinglePackExportRowCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${pack.publisher} · ${pack.stickers.size} stickers",
+                    text = "${pack.publisher} • ${pack.stickers.size} stickers",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -351,7 +353,12 @@ private fun ConflictResolutionSectionCard(
     val conflicts = staged.conflicts
     val nonConflictCount = staged.entries.size - conflicts.size
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFD2DFEE),
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -419,7 +426,6 @@ private fun ConflictResolutionSectionCard(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ConflictItemBlock(
     entry: StagedPackEntry,
@@ -427,8 +433,13 @@ private fun ConflictItemBlock(
     onSelect: (ConflictResolution) -> Unit,
 ) {
     val existing = entry.existingPack
+    val options = listOf(
+        ConflictResolution.REPLACE to "Reemplazar",
+        ConflictResolution.DUPLICATE_NEW_ID to "Duplicar",
+        ConflictResolution.SKIP to "Omitir",
+    )
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -445,31 +456,30 @@ private fun ConflictItemBlock(
                 text = buildString {
                     append("En copia: ${entry.pack.stickers.size} stickers")
                     if (existing != null) {
-                        append(" · Local actual: «${existing.name}» (${existing.stickers.size} stickers)")
+                        append(" • Local actual: «${existing.name}» (${existing.stickers.size} stickers)")
                     }
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                FilterChip(
-                    selected = selected == ConflictResolution.REPLACE,
-                    onClick = { onSelect(ConflictResolution.REPLACE) },
-                    label = { Text("Reemplazar") },
-                )
-                FilterChip(
-                    selected = selected == ConflictResolution.DUPLICATE_NEW_ID,
-                    onClick = { onSelect(ConflictResolution.DUPLICATE_NEW_ID) },
-                    label = { Text("Duplicar como nuevo") },
-                )
-                FilterChip(
-                    selected = selected == ConflictResolution.SKIP,
-                    onClick = { onSelect(ConflictResolution.SKIP) },
-                    label = { Text("Omitir") },
-                )
+                options.forEach { (resolution, label) ->
+                    FilterChip(
+                        selected = selected == resolution,
+                        onClick = { onSelect(resolution) },
+                        label = {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        },
+                    )
+                }
             }
         }
     }

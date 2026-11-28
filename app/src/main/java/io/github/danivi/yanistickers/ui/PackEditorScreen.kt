@@ -1,5 +1,6 @@
 package io.github.danivi.yanistickers.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,9 +33,11 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.SentimentSatisfied
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -424,13 +427,10 @@ private fun WhatsAppFooterButton(
 ) {
     Column {
         Spacer(modifier = Modifier.height(4.dp))
-        Button(
-            onClick = onClick,
+        AddToWhatsAppButton(
             enabled = isValid,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.action_add_to_whatsapp))
-        }
+            onClick = onClick,
+        )
     }
 }
 
@@ -507,22 +507,30 @@ private fun StickerDetailDialog(
                         onClick = onSetAsTray,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
+                        Icon(
+                            imageVector = Icons.Outlined.SentimentSatisfied,
+                            contentDescription = null,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.action_set_as_tray))
                     }
                     OutlinedButton(
                         onClick = onDelete,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error,
+                        ),
+                        border = BorderStroke(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.6f),
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Delete,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.action_delete),
-                            color = MaterialTheme.colorScheme.error,
-                        )
+                        Text(text = stringResource(R.string.action_delete))
                     }
                 }
             }
@@ -659,7 +667,14 @@ private fun StickerEditorRowCard(
     val assetLabel = report?.assetName ?: sticker.item.file
 
     Card(modifier = modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(
+            modifier = Modifier.padding(
+                start = 12.dp,
+                top = 12.dp,
+                end = 12.dp,
+                bottom = 2.dp,
+            ),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LocalStickerThumbnail(
                     file = sticker.assetFile,

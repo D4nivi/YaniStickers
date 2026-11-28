@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -55,6 +56,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,6 +70,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -127,7 +130,7 @@ fun PackListScreen(
             title = { Text("Borrar pack") },
             text = {
                 Text(
-                    "¿Seguro que quieres eliminar «${target.pack.name}» y todos sus archivos locales? " +
+                    "¿Seguro que quieres eliminar \"${target.pack.name}\" y todos sus archivos locales? " +
                         "Esta acción no se puede deshacer.",
                 )
             },
@@ -154,9 +157,14 @@ fun PackListScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ),
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -220,6 +228,8 @@ fun PackListScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showCreateDialog = true },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
                 icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
                 text = { Text(stringResource(R.string.action_new_pack)) },
             )
@@ -257,24 +267,34 @@ fun PackListScreen(
                     }
                 }
                 state.packs.isEmpty() -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
                         Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(horizontal = 16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             Text(
                                 text = stringResource(R.string.pack_list_empty_title),
-                                style = MaterialTheme.typography.titleMedium,
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center,
                             )
                             Text(
                                 text = stringResource(R.string.pack_list_empty_body),
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
                             )
                         }
+
+                        GatitasFooterImage(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .padding(bottom = 76.dp),
+                        )
                     }
                 }
                 else -> {
@@ -293,6 +313,13 @@ fun PackListScreen(
                                 },
                                 onDelete = { packPendingDelete = item },
                                 onAddToWhatsApp = { triggerAddToWhatsApp(item.pack) },
+                            )
+                        }
+                        item(key = "gatitas_footer") {
+                            GatitasFooterImage(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp),
                             )
                         }
                     }
@@ -338,7 +365,7 @@ private fun PackSummaryCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = "${pack.publisher} · ${pack.stickers.size} stickers",
+                        text = "${pack.publisher} • ${pack.stickers.size} stickers",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -442,14 +469,28 @@ private fun PackSummaryCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Button(
-                onClick = onAddToWhatsApp,
+            AddToWhatsAppButton(
                 enabled = isValid,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.action_add_to_whatsapp))
-            }
+                onClick = onAddToWhatsApp,
+            )
         }
+    }
+}
+
+@Composable
+private fun GatitasFooterImage(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.gatitas),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .heightIn(max = 160.dp),
+        )
     }
 }
 
@@ -468,7 +509,7 @@ private fun PackStickersPreviewStrip(
             if (file != null) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
                     modifier = Modifier
                         .weight(1f)
                         .aspectRatio(1f),

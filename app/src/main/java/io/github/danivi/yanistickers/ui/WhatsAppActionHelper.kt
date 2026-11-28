@@ -28,6 +28,8 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
@@ -48,9 +50,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,6 +67,7 @@ import coil3.request.crossfade
 import io.github.danivi.yanistickers.R
 import io.github.danivi.yanistickers.data.PackJsonParser
 import io.github.danivi.yanistickers.data.StickerPack
+import io.github.danivi.yanistickers.ui.theme.WhatsAppGreen
 import io.github.danivi.yanistickers.validation.PackValidator
 import io.github.danivi.yanistickers.whatsapp.WhatsAppBridge
 import io.github.danivi.yanistickers.whatsapp.WhatsAppContract
@@ -140,6 +146,46 @@ fun rememberWhatsAppAddAction(
             0 -> launchWithTarget(pack, null)
             1 -> launchWithTarget(pack, installedTargets.first().packageName)
             else -> pendingTargetPack = pack
+        }
+    }
+}
+
+/**
+ * Botón verde característico de WhatsApp con el logotipo alineado completamente a la izquierda.
+ */
+@Composable
+fun AddToWhatsAppButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = WhatsAppGreen,
+            contentColor = Color.White,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+        ),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Icon(
+                painter = painterResource(R.drawable.ic_whatsapp_logo),
+                contentDescription = null,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(20.dp),
+            )
+            Text(
+                text = stringResource(R.string.action_add_to_whatsapp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 28.dp),
+            )
         }
     }
 }
